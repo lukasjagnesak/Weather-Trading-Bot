@@ -70,6 +70,11 @@ class Settings(BaseSettings):
         default=["gfs_seamless", "ecmwf_ifs025"]
     )
 
+    # Copy-trading
+    copy_trade_enabled: bool = False
+    copy_trade_min_wallets: int = 2  # min wallets holding a position to trigger copy
+    copy_trade_scale: float = 0.5  # scale factor for copied positions (0-1)
+
     # Scan interval in seconds
     scan_interval: int = 300  # 5 minutes
 

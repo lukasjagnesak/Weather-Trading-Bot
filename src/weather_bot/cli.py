@@ -175,5 +175,147 @@ def forecast(city: str, verbose: bool):
     asyncio.run(_show())
 
 
+@main.group(name="copy")
+def copy_group():
+    """Copy-trading: track whale wallets and mirror positions."""
+    pass
+
+
+@copy_group.command(name="add")
+@click.argument("addresses", nargs=-1, required=True)
+@click.option("--label", "-l", default="", help="Label for the wallet(s)")
+def copy_add(addresses: tuple[str, ...], label: str):
+    """Add wallet address(es) to the copy-trading watchlist."""
+    from .copytrading import add_wallet
+
+    for addr in addresses:
+        try:
+            wallet = add_wallet(addr, label=label)
+            click.echo(f"  + {wallet.address}  {wallet.label or '(no label)'}")
+        except ValueError as e:
+            click.echo(f"  ! {e}", err=True)
+
+
+@copy_group.command(name="remove")
+@click.argument("address")
+def copy_remove(address: str):
+    """Remove a wallet from the copy-trading watchlist."""
+    from .copytrading import remove_wallet
+
+    if remove_wallet(address):
+        click.echo(f"  Removed {address.lower()}")
+    else:
+        click.echo(f"  Wallet {address.lower()} not found", err=True)
+
+
+@copy_group.command(name="list")
+def copy_list():
+    """List all tracked wallets."""
+    from .copytrading import load_wallets
+
+    wallets = load_wallets()
+    if not wallets:
+        click.echo("No wallets tracked. Add one with: weather-bot copy add <address>")
+        return
+
+    click.echo(f"\nTracked wallets ({len(wallets)}):\n")
+    click.echo(f"  {'Address':<44} {'Label':<20} {'Enabled':>7}")
+    click.echo(f"  {'-'*74}")
+    for w in wallets:
+        status = "yes" if w.enabled else "no"
+        click.echo(f"  {w.address:<44} {w.label or '-':<20} {status:>7}")
+
+
+@copy_group.command(name="positions")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.option("--wallet", "-w", default=None, help="Filter by specific wallet address")
+def copy_positions(verbose: bool, wallet: str | None):
+    """Fetch and display positions for all tracked wallets."""
+    _setup_logging(verbose)
+
+    async def _fetch():
+        from .copytrading import (
+            fetch_all_tracked_positions,
+            fetch_wallet_positions,
+            load_wallets,
+            summarize_positions,
+        )
+
+        if wallet:
+            positions = await fetch_wallet_positions(wallet.lower())
+            if not positions:
+                click.echo(f"No positions found for {wallet[:10]}...")
+                return
+            click.echo(f"\nPositions for {wallet[:10]}... ({len(positions)}):\n")
+            click.echo(f"  {'Market':<50} {'Side':<5} {'Size':>8} {'Avg$':>6} {'Now$':>6} {'PnL$':>8}")
+            click.echo(f"  {'-'*86}")
+            for p in sorted(positions, key=lambda x: abs(x.size), reverse=True):
+                click.echo(
+                    f"  {p.title[:48]:<50} {p.outcome:<5} "
+                    f"{p.size:>8.1f} {p.avg_price:>5.3f} {p.current_price:>5.3f} "
+                    f"{'%+.2f' % p.pnl:>8}"
+                )
+            return
+
+        all_positions = await fetch_all_tracked_positions()
+        if not all_positions or all(len(p) == 0 for p in all_positions.values()):
+            click.echo("No positions found across tracked wallets.")
+            return
+
+        # Show per-wallet summary
+        wallets = {w.address: w for w in load_wallets()}
+        for addr, positions in all_positions.items():
+            if not positions:
+                continue
+            w = wallets.get(addr)
+            name = w.label if w and w.label else addr[:10] + "..."
+            click.echo(f"\n  {name} ({len(positions)} positions):")
+            for p in sorted(positions, key=lambda x: abs(x.size), reverse=True)[:10]:
+                click.echo(
+                    f"    {p.title[:45]:<47} {p.outcome:<4} "
+                    f"size={p.size:>7.1f}  @{p.avg_price:.3f}  now={p.current_price:.3f}"
+                )
+
+        # Show consensus summary
+        summary = summarize_positions(all_positions)
+        consensus = [s for s in summary if s["wallet_count"] >= 2]
+        if consensus:
+            click.echo(f"\n  Consensus positions (held by 2+ wallets):\n")
+            click.echo(f"  {'Market':<45} {'Side':<5} {'Wallets':>7} {'TotalSz':>9} {'Price':>6}")
+            click.echo(f"  {'-'*75}")
+            for c in consensus:
+                click.echo(
+                    f"  {c['title'][:43]:<45} {c['outcome']:<5} "
+                    f"{c['wallet_count']:>7} {c['total_size']:>9.1f} "
+                    f"{c['current_price']:>5.3f}"
+                )
+
+    asyncio.run(_fetch())
+
+
+@copy_group.command(name="enable")
+@click.argument("address")
+def copy_enable(address: str):
+    """Enable copy-trading for a wallet."""
+    from .copytrading import toggle_wallet
+
+    if toggle_wallet(address, enabled=True):
+        click.echo(f"  Enabled {address.lower()}")
+    else:
+        click.echo(f"  Wallet not found", err=True)
+
+
+@copy_group.command(name="disable")
+@click.argument("address")
+def copy_disable(address: str):
+    """Disable copy-trading for a wallet (keep in list but don't track)."""
+    from .copytrading import toggle_wallet
+
+    if toggle_wallet(address, enabled=False):
+        click.echo(f"  Disabled {address.lower()}")
+    else:
+        click.echo(f"  Wallet not found", err=True)
+
+
 if __name__ == "__main__":
     main()

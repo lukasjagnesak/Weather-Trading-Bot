@@ -1,0 +1,44 @@
+[
+  {
+    "address": "0x594edb9112f526fa6a80b8f858a6379c8a2c1c11",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  },
+  {
+    "address": "0x87650b9f63563f7c456d9bbcceee5f9faf06ed81",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  },
+  {
+    "address": "0x5f211a24da4c005d9438a1ea269673b85ed0b376",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  },
+  {
+    "address": "0xba8dd483ab52bf7fd1877ac323a5c2ae7747009d",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  },
+  {
+    "address": "0xb40e89677d59665d5188541ad860450a6e2a7cc9",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  },
+  {
+    "address": "0x1c266db0f8529b1f25b77123e9c0c918ac2f6e31",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  },
+  {
+    "address": "0x4df7da721042bf8b75bd1cb7acbeb7f83aaf522d",
+    "label": "",
+    "added_at": "2026-03-20T00:00:00",
+    "enabled": true
+  }
+]
