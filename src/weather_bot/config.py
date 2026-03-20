@@ -70,6 +70,13 @@ class Settings(BaseSettings):
         default=["gfs_seamless", "ecmwf_ifs025"]
     )
 
+    # Telegram notifications
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_trade_alerts: bool = True  # send alert on each trade
+    telegram_daily_report: bool = True  # send daily summary
+    telegram_daily_report_hour: int = 7  # UTC hour for daily report
+
     # Copy-trading
     copy_trade_enabled: bool = False
     copy_trade_min_wallets: int = 2  # min wallets holding a position to trigger copy

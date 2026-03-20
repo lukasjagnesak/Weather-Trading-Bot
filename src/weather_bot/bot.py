@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from .config import Settings
 from .market import fetch_active_temperature_markets
 from .models import PortfolioState
 from .risk import apply_risk_controls
+from .telegram import format_daily_report, format_trade_alert, send_telegram
 from .trading import detect_signals, execute_signal
 from .weather import fetch_all_cities
 
@@ -80,7 +81,7 @@ async def run_scan(
 
     for signal in signals:
         success = await execute_signal(signal, settings, dry_run=dry_run)
-        results.append({
+        trade_result = {
             "city": signal.outcome.city,
             "date": signal.outcome.target_date.isoformat(),
             "bucket": signal.outcome.bucket.label,
@@ -90,7 +91,15 @@ async def run_scan(
             "edge": round(signal.edge * 100, 1),
             "size_usd": signal.position_size_usd,
             "executed": success,
-        })
+        }
+        results.append(trade_result)
+
+        # Send Telegram alert for each executed trade
+        if settings.telegram_trade_alerts and success:
+            try:
+                await send_telegram(format_trade_alert(trade_result), settings)
+            except Exception as e:
+                logger.warning("Telegram trade alert failed: %s", e)
 
     return results
 
@@ -104,11 +113,52 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
         settings.scan_interval,
     )
 
+    # Track daily report state
+    last_report_date: date | None = None
+    all_trades_today: list[dict] = []
+
     while True:
+        now = datetime.utcnow()
+        today = now.date()
+
+        # Reset daily trades at midnight
+        if last_report_date is not None and last_report_date != today:
+            all_trades_today = []
+
+        # Send daily report at configured hour
+        if (
+            settings.telegram_daily_report
+            and now.hour >= settings.telegram_daily_report_hour
+            and last_report_date != today
+        ):
+            try:
+                from .copytrading import load_wallets
+
+                tracked_count = len([w for w in load_wallets() if w.enabled])
+            except Exception:
+                tracked_count = 0
+
+            report = format_daily_report(
+                trades=all_trades_today,
+                bankroll=portfolio.bankroll,
+                daily_pnl=portfolio.daily_pnl,
+                peak_bankroll=portfolio.peak_bankroll,
+                tracked_wallets=tracked_count,
+            )
+            try:
+                await send_telegram(report, settings)
+                logger.info("Daily report sent to Telegram")
+            except Exception as e:
+                logger.warning("Failed to send daily report: %s", e)
+
+            last_report_date = today
+
+        # Run scan
         try:
             results = await run_scan(settings, portfolio)
             if results:
                 _print_results_table(results)
+                all_trades_today.extend(results)
             else:
                 logger.info("Scan complete, no trades")
         except Exception as e:

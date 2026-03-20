@@ -1,0 +1,33 @@
+[Unit]
+Description=Polymarket Weather Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=weatherbot
+Group=weatherbot
+WorkingDirectory=/opt/weather-bot
+ExecStart=/opt/weather-bot/venv/bin/weather-bot run --verbose
+Restart=always
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Environment
+EnvironmentFile=/opt/weather-bot/.env
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/weather-bot
+
+# Logging (journalctl -u weather-bot -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=weather-bot
+
+[Install]
+WantedBy=multi-user.target
