@@ -23,11 +23,6 @@ ENSEMBLE_MODELS = {
 }
 
 
-def _build_member_params(model: str) -> str:
-    """Build the comma-separated member variable names for daily max temp."""
-    n = ENSEMBLE_MODELS[model]
-    return ",".join(f"temperature_2m_max_member{i}" for i in range(n))
-
 
 async def fetch_ensemble_forecast(
     city_key: str,
@@ -68,16 +63,13 @@ async def _fetch_single_model(
     model: str,
 ) -> EnsembleForecast | None:
     """Fetch a single ensemble model forecast."""
-    n_members = ENSEMBLE_MODELS.get(model, 31)
-    member_vars = ",".join(f"temperature_2m_max_member{i}" for i in range(n_members))
-
     # Determine temperature unit for the API
     temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
 
     params = {
         "latitude": city.latitude,
         "longitude": city.longitude,
-        "daily": member_vars,
+        "daily": "temperature_2m_max",
         "models": model,
         "start_date": target_date.isoformat(),
         "end_date": target_date.isoformat(),
@@ -98,12 +90,10 @@ async def _fetch_single_model(
         logger.warning("No daily data for %s/%s/%s", model, city_key, target_date)
         return None
 
-    # Extract member values for the target date
+    # Extract member values — API returns temperature_2m_max_member01, member02, etc.
     members = []
-    for i in range(n_members):
-        key = f"temperature_2m_max_member{i}"
-        values = daily.get(key)
-        if values and len(values) > 0 and values[0] is not None:
+    for key, values in daily.items():
+        if key.startswith("temperature_2m_max_member") and values and values[0] is not None:
             members.append(float(values[0]))
 
     if not members:
