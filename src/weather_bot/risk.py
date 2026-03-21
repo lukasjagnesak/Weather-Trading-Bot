@@ -43,13 +43,16 @@ def check_portfolio_limits(
 
 def filter_correlated_signals(
     signals: list[Signal],
-    max_same_day: int = 5,
-    max_same_city: int = 3,
+    max_same_day: int = 20,
+    max_same_city: int = 10,
 ) -> list[Signal]:
     """Filter signals to limit correlated exposure.
 
     - Max N positions for markets resolving on the same day
     - Max M positions for the same city
+
+    Limits are generous because verified signals are high-confidence
+    and we want to bet on every bucket where we expect to win.
     """
     filtered: list[Signal] = []
     day_counts: dict[str, int] = {}
