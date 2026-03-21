@@ -114,12 +114,17 @@ def _verified_signal(
     city: str,
     target_date: date,
 ) -> Signal | None:
-    """Generate signal for a verified bucket — always bets YES or NO.
+    """Generate signal ONLY for high-confidence profitable bets.
 
-    When we have verified temp data, we know the answer:
-    - Temp is in this bucket → BUY_YES (if market underprices)
-    - Temp is NOT in this bucket → BUY_NO (if market overprices YES)
+    Rules:
+    - Max price 95c (minimum 5% profit on $1 payout)
+    - Only bet when we're confident in the outcome
+    - BUY_YES: verified temp is in this bucket + model confirms
+    - BUY_NO: verified temp is far from bucket + model confirms
+    - Skip uncertain/borderline cases
     """
+    MAX_PRICE = 0.95  # never pay more than 95c → min 5% profit
+
     verified_temp = vf.mean_high
     bucket = outcome.bucket
 
@@ -128,62 +133,73 @@ def _verified_signal(
 
     if in_bucket:
         # ─── CORRECT BUCKET: BUY_YES ─────────────────────────────────
-        side = "BUY_YES"
-        # True probability based on how well sources agree
-        # In the correct bucket: high agreement → near-certain YES
-        true_prob = min(0.95, model_prob * 0.5 + vf.agreement_score * 0.5)
-        true_prob = max(true_prob, model_prob)  # never less than model says
-        effective_price = market_prob
-        edge = true_prob - effective_price
-
-        if edge <= 0.01:  # market already priced correctly
+        # Only if model also says this is likely (model+verification agree)
+        if model_prob < 0.15:
+            # Model says unlikely despite verification — disagreement, skip
             logger.debug(
-                "Verified YES %s %s but no edge (model=%.0f%% market=%.0f%%)",
-                city, bucket.label, true_prob * 100, market_prob * 100,
+                "Verified YES %s %s but model disagrees (%.0f%%), skipping",
+                city, bucket.label, model_prob * 100,
             )
             return None
 
-        boost = 1.0 + vf.agreement_score  # 1.6x - 2.0x
+        side = "BUY_YES"
+        effective_price = market_prob
+
+        # Must be buyable under 95c
+        if effective_price > MAX_PRICE:
+            logger.debug(
+                "Verified YES %s %s but price %.0fc > 95c, no profit",
+                city, bucket.label, effective_price * 100,
+            )
+            return None
+
+        edge = model_prob - effective_price
+        if edge <= 0:
+            return None
+
         tag = "VERIFIED-YES"
 
     else:
-        # ─── WRONG BUCKET: BUY_NO ────────────────────────────────────
+        # ─── WRONG BUCKET: only bet NO if we're truly confident ──────
+        # Need: temp far enough away AND model agrees it's unlikely
+
+        # Minimum distance: at least 2 degrees or 2× source spread
+        safe_margin = max(vf.spread * 2, 2.0)
+        if distance < safe_margin:
+            # Too close to bucket edge — uncertain, skip
+            return None
+
+        if model_prob > 0.20:
+            # Model thinks there's a real chance — don't bet against it
+            return None
+
         side = "BUY_NO"
-        # True probability of NO = how sure we are temp is NOT here
-        # Closer to bucket = less certain; far away = very certain
-        # With tight agreement (low spread), even nearby buckets are safe
-        distance_certainty = min(1.0, distance / max(vf.spread * 3, 3.0))
-        true_prob_no = min(0.97, 0.6 + 0.37 * distance_certainty * vf.agreement_score)
-        true_prob_no = max(true_prob_no, 1.0 - model_prob)  # never less than model
-
         effective_price = outcome.current_price_no
-        edge = true_prob_no - effective_price
 
-        if edge <= 0.01:  # market already priced correctly
+        # Must be buyable under 95c
+        if effective_price > MAX_PRICE:
             logger.debug(
-                "Verified NO %s %s but no edge (prob_no=%.0f%% price_no=%.0f%%)",
-                city, bucket.label, true_prob_no * 100, effective_price * 100,
+                "Verified NO %s %s but NO price %.0fc > 95c, no profit",
+                city, bucket.label, effective_price * 100,
             )
             return None
 
-        # Boost scales with distance: nearby=1.0x, far=1.5x
-        boost = 1.0 + min(0.5, distance / 20.0)
-        true_prob = 1.0 - true_prob_no  # for Signal model_probability (prob of YES)
+        edge = (1.0 - model_prob) - effective_price
+        if edge <= 0:
+            return None
+
         tag = "VERIFIED-NO"
 
     # Kelly sizing
-    if side == "BUY_YES":
-        kelly_f = _kelly_fraction(true_prob, effective_price)
-    else:
-        kelly_f = _kelly_fraction(true_prob_no, effective_price)
-
+    true_prob = model_prob if side == "BUY_YES" else 1.0 - model_prob
+    kelly_f = _kelly_fraction(true_prob, effective_price)
     if kelly_f <= 0:
         return None
 
-    adjusted_kelly = kelly_f * settings.kelly_fraction * confidence * boost
+    adjusted_kelly = kelly_f * settings.kelly_fraction * confidence
 
     position_size = adjusted_kelly * portfolio.bankroll
-    max_pct = min(settings.max_position_pct * 2, 0.05)  # up to 5% for verified
+    max_pct = min(settings.max_position_pct * 2, 0.05)
     position_size = min(position_size, max_pct * portfolio.bankroll)
 
     if position_size < 1.0:
@@ -202,11 +218,10 @@ def _verified_signal(
 
     logger.info(
         "[%s] %s %s | %s %s | verified=%.1f° dist=%.1f | "
-        "prob=%.0f%% market=%.0f%% edge=%.1f%% $%.2f",
+        "model=%.0f%% price=%.0fc edge=%.1f%% $%.2f",
         tag, side, outcome.bucket.label, city, target_date,
         verified_temp, distance,
-        (true_prob if side == "BUY_YES" else true_prob_no) * 100,
-        effective_price * 100, edge * 100, position_size,
+        model_prob * 100, effective_price * 100, edge * 100, position_size,
     )
 
     return signal
