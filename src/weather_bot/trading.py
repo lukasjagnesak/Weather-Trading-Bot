@@ -81,44 +81,62 @@ def detect_signals(
             model_prob = model_probs.get(outcome.bucket.label, 0.0)
             market_prob = outcome.current_price_yes
 
-            # ─── Strategy 1: Outcome-focused (BUY_YES on correct bucket) ────
-            # If verification data exists and this is the peak bucket or very
-            # close to verified temperature, prioritize BUY_YES
-            is_verified_pick = False
+            # ─── Verification: determine if this bucket is YES or NO ─────
+            is_verified_yes = False  # verified temp IS in this bucket
+            is_verified_no = False   # verified temp is FAR from this bucket
             verified_boost = 1.0
 
-            if vf and vf.source_count >= 2:
+            if vf and vf.source_count >= 2 and vf.agreement_score >= 0.6:
                 verified_temp = vf.mean_high
                 bucket = outcome.bucket
+                spread = vf.spread
 
-                # Check if verified temperature falls in this bucket
-                in_bucket = (
-                    (bucket.is_lower_tail and verified_temp < bucket.upper) or
-                    (bucket.is_upper_tail and verified_temp >= bucket.lower) or
-                    (not bucket.is_lower_tail and not bucket.is_upper_tail
-                     and bucket.lower <= verified_temp < bucket.upper)
-                )
+                # Check if verified temperature falls IN this bucket
+                in_bucket = _temp_in_bucket(verified_temp, bucket)
 
-                if in_bucket and vf.agreement_score >= 0.6:
-                    is_verified_pick = True
-                    # Scale boost by agreement: 0.6→1.0x, 1.0→2.0x
+                if in_bucket:
+                    is_verified_yes = True
                     verified_boost = 1.0 + vf.agreement_score
                     logger.info(
-                        "VERIFIED PICK: %s %s — verified temp %.1f falls in bucket %s "
+                        "VERIFIED YES: %s %s — temp %.1f IN bucket %s "
                         "(agreement=%.0f%%, boost=%.1fx)",
                         city, target_date, verified_temp, bucket.label,
                         vf.agreement_score * 100, verified_boost,
                     )
+                else:
+                    # Check how FAR the verified temp is from this bucket
+                    distance = _distance_from_bucket(verified_temp, bucket)
+                    # If verified temp is > 2 std deviations (spread) away
+                    # from the bucket, it's a strong NO signal
+                    safe_margin = max(spread * 2, 2.0)  # at least 2 degrees
+                    if distance >= safe_margin:
+                        is_verified_no = True
+                        # Stronger boost when temp is very far from bucket
+                        verified_boost = 1.0 + min(vf.agreement_score, distance / 10.0)
+                        logger.info(
+                            "VERIFIED NO: %s %s — temp %.1f is %.1f away from bucket %s "
+                            "(margin=%.1f, agreement=%.0f%%, boost=%.1fx)",
+                            city, target_date, verified_temp, distance, bucket.label,
+                            safe_margin, vf.agreement_score * 100, verified_boost,
+                        )
 
-            # ─── Strategy 2: Edge-based (both sides) ────────────────────────
+            is_verified = is_verified_yes or is_verified_no
+
+            # ─── Edge calculation (both sides) ──────────────────────────────
             edge_yes = model_prob - market_prob
             edge_no = (1.0 - model_prob) - outcome.current_price_no
 
-            # For verified picks, always consider BUY_YES
-            if is_verified_pick and model_prob > market_prob:
+            # Verified YES → force BUY_YES if model agrees
+            if is_verified_yes and model_prob > market_prob:
                 edge = edge_yes
                 side = "BUY_YES"
                 effective_price = market_prob
+            # Verified NO → force BUY_NO if model agrees
+            elif is_verified_no and (1.0 - model_prob) > outcome.current_price_no:
+                edge = edge_no
+                side = "BUY_NO"
+                effective_price = outcome.current_price_no
+            # Fallback: pick whichever side has more edge
             elif edge_yes >= edge_no and edge_yes > 0:
                 edge = edge_yes
                 side = "BUY_YES"
@@ -132,7 +150,7 @@ def detect_signals(
 
             # Minimum edge threshold — lower for verified picks
             min_edge = settings.min_edge_threshold
-            if is_verified_pick:
+            if is_verified:
                 min_edge = min(min_edge, 0.05)  # 5% for verified picks
 
             if edge < min_edge:
@@ -154,7 +172,7 @@ def detect_signals(
 
             # Cap at max position size (higher cap for verified picks)
             max_pct = settings.max_position_pct
-            if is_verified_pick:
+            if is_verified:
                 max_pct = min(max_pct * 2, 0.05)  # up to 5% for verified
             max_position = max_pct * portfolio.bankroll
             position_size = min(position_size, max_position)
@@ -175,7 +193,7 @@ def detect_signals(
             )
             signals.append(signal)
 
-            tag = "VERIFIED" if is_verified_pick else "EDGE"
+            tag = "VERIFIED" if is_verified else "EDGE"
             logger.info(
                 "[%s] Signal: %s %s | %s on %s | model=%.1f%% market=%.1f%% "
                 "edge=%.1f%% conf=%.0f%% size=$%.2f",
@@ -187,6 +205,30 @@ def detect_signals(
     # Sort by: verified picks first, then by edge
     signals.sort(key=lambda s: s.edge, reverse=True)
     return signals
+
+
+def _temp_in_bucket(temp: float, bucket) -> bool:
+    """Check if a temperature falls within a bucket's range."""
+    if bucket.is_lower_tail:
+        return temp < bucket.upper
+    elif bucket.is_upper_tail:
+        return temp >= bucket.lower
+    else:
+        return bucket.lower <= temp < bucket.upper
+
+
+def _distance_from_bucket(temp: float, bucket) -> float:
+    """How far (in degrees) is the temperature from the nearest bucket edge."""
+    if bucket.is_lower_tail:
+        return max(0.0, temp - bucket.upper)
+    elif bucket.is_upper_tail:
+        return max(0.0, bucket.lower - temp)
+    else:
+        if temp < bucket.lower:
+            return bucket.lower - temp
+        elif temp >= bucket.upper:
+            return temp - bucket.upper
+        return 0.0  # inside bucket
 
 
 def _kelly_fraction(true_prob: float, market_price: float) -> float:
