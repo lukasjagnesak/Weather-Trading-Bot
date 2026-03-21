@@ -1,4 +1,10 @@
-"""Trading engine: edge detection, Kelly sizing, and order execution."""
+"""Trading engine: edge detection, Kelly sizing, and order execution.
+
+Two signal strategies:
+1. EDGE-BASED: traditional mispricing detection (model prob vs market price)
+2. OUTCOME-FOCUSED: identify the CORRECT bucket via multi-source verification,
+   then bet on it if the market price offers value
+"""
 
 from __future__ import annotations
 
@@ -8,6 +14,7 @@ from datetime import date
 from .config import Settings
 from .models import EnsembleForecast, MarketOutcome, PortfolioState, Signal
 from .probability import compute_bucket_probabilities, ensemble_confidence
+from .verification import VerifiedForecast
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +24,14 @@ def detect_signals(
     forecasts_by_key: dict[tuple[str, date], list[EnsembleForecast]],
     settings: Settings,
     portfolio: PortfolioState,
+    verified: dict[tuple[str, date], VerifiedForecast] | None = None,
 ) -> list[Signal]:
-    """Scan all market outcomes and generate trading signals where edge exists.
+    """Scan all market outcomes and generate trading signals.
 
-    For each market outcome:
-    1. Look up the ensemble forecasts for the same city/date
-    2. Compute model probability for the temperature bucket
-    3. Compare to market price
-    4. If edge > threshold, compute Kelly-sized position
+    Combines two approaches:
+    1. Ensemble edge detection (as before)
+    2. Outcome-focused: find the correct bucket via cross-source verification
+       and bet BUY_YES on the peak probability bucket if market underprices it
     """
     signals: list[Signal] = []
 
@@ -46,9 +53,26 @@ def detect_signals(
         model_probs = compute_bucket_probabilities(forecast_list, buckets)
         confidence = ensemble_confidence(forecast_list)
 
+        # Get verification data for this city/date
+        vf = verified.get(forecast_key) if verified else None
+
+        # Boost confidence if multi-source verification agrees
+        if vf and vf.source_count >= 3:
+            verification_agreement = vf.agreement_score
+            # Blend ensemble confidence with verification agreement
+            confidence = 0.5 * confidence + 0.5 * verification_agreement
+            logger.info(
+                "Verification for %s/%s: %d sources, mean=%.1f, spread=%.1f, agreement=%.0f%%",
+                city, target_date, vf.source_count, vf.mean_high,
+                vf.spread, vf.agreement_score * 100,
+            )
+
+        # Find the PEAK bucket (most likely outcome)
+        peak_label = max(model_probs, key=model_probs.get) if model_probs else None
+        peak_prob = model_probs.get(peak_label, 0) if peak_label else 0
+
         for outcome in city_outcomes:
             # Skip markets with no real price discovery
-            # Exact 0.500 means no orders have been matched yet
             if outcome.current_price_yes == 0.5 and outcome.current_price_no == 0.5:
                 continue
             if outcome.volume < 100:
@@ -57,12 +81,45 @@ def detect_signals(
             model_prob = model_probs.get(outcome.bucket.label, 0.0)
             market_prob = outcome.current_price_yes
 
-            # Calculate edge for both sides
+            # ─── Strategy 1: Outcome-focused (BUY_YES on correct bucket) ────
+            # If verification data exists and this is the peak bucket or very
+            # close to verified temperature, prioritize BUY_YES
+            is_verified_pick = False
+            verified_boost = 1.0
+
+            if vf and vf.source_count >= 2:
+                verified_temp = vf.mean_high
+                bucket = outcome.bucket
+
+                # Check if verified temperature falls in this bucket
+                in_bucket = (
+                    (bucket.is_lower_tail and verified_temp < bucket.upper) or
+                    (bucket.is_upper_tail and verified_temp >= bucket.lower) or
+                    (not bucket.is_lower_tail and not bucket.is_upper_tail
+                     and bucket.lower <= verified_temp < bucket.upper)
+                )
+
+                if in_bucket and vf.agreement_score >= 0.6:
+                    is_verified_pick = True
+                    # Scale boost by agreement: 0.6→1.0x, 1.0→2.0x
+                    verified_boost = 1.0 + vf.agreement_score
+                    logger.info(
+                        "VERIFIED PICK: %s %s — verified temp %.1f falls in bucket %s "
+                        "(agreement=%.0f%%, boost=%.1fx)",
+                        city, target_date, verified_temp, bucket.label,
+                        vf.agreement_score * 100, verified_boost,
+                    )
+
+            # ─── Strategy 2: Edge-based (both sides) ────────────────────────
             edge_yes = model_prob - market_prob
             edge_no = (1.0 - model_prob) - outcome.current_price_no
 
-            # Pick the side with the larger edge
-            if edge_yes >= edge_no and edge_yes > 0:
+            # For verified picks, always consider BUY_YES
+            if is_verified_pick and model_prob > market_prob:
+                edge = edge_yes
+                side = "BUY_YES"
+                effective_price = market_prob
+            elif edge_yes >= edge_no and edge_yes > 0:
                 edge = edge_yes
                 side = "BUY_YES"
                 effective_price = market_prob
@@ -73,8 +130,12 @@ def detect_signals(
             else:
                 continue  # no edge
 
-            # Check minimum edge threshold
-            if edge < settings.min_edge_threshold:
+            # Minimum edge threshold — lower for verified picks
+            min_edge = settings.min_edge_threshold
+            if is_verified_pick:
+                min_edge = min(min_edge, 0.05)  # 5% for verified picks
+
+            if edge < min_edge:
                 continue
 
             # Kelly criterion for position sizing
@@ -85,14 +146,17 @@ def detect_signals(
             if kelly_f <= 0:
                 continue
 
-            # Apply fractional Kelly and confidence scaling
-            adjusted_kelly = kelly_f * settings.kelly_fraction * confidence
+            # Apply fractional Kelly, confidence, and verification boost
+            adjusted_kelly = kelly_f * settings.kelly_fraction * confidence * verified_boost
 
             # Position size in USD
             position_size = adjusted_kelly * portfolio.bankroll
 
-            # Cap at max position size
-            max_position = settings.max_position_pct * portfolio.bankroll
+            # Cap at max position size (higher cap for verified picks)
+            max_pct = settings.max_position_pct
+            if is_verified_pick:
+                max_pct = min(max_pct * 2, 0.05)  # up to 5% for verified
+            max_position = max_pct * portfolio.bankroll
             position_size = min(position_size, max_position)
 
             # Minimum viable trade size
@@ -111,19 +175,16 @@ def detect_signals(
             )
             signals.append(signal)
 
+            tag = "VERIFIED" if is_verified_pick else "EDGE"
             logger.info(
-                "Signal: %s %s | %s on %s | model=%.1f%% market=%.1f%% edge=%.1f%% size=$%.2f",
-                side,
-                outcome.bucket.label,
-                city,
-                target_date,
-                model_prob * 100,
-                market_prob * 100,
-                edge * 100,
-                position_size,
+                "[%s] Signal: %s %s | %s on %s | model=%.1f%% market=%.1f%% "
+                "edge=%.1f%% conf=%.0f%% size=$%.2f",
+                tag, side, outcome.bucket.label, city, target_date,
+                model_prob * 100, market_prob * 100, edge * 100,
+                confidence * 100, position_size,
             )
 
-    # Sort by edge (highest first)
+    # Sort by: verified picks first, then by edge
     signals.sort(key=lambda s: s.edge, reverse=True)
     return signals
 
@@ -133,9 +194,6 @@ def _kelly_fraction(true_prob: float, market_price: float) -> float:
 
     For buying YES at price c with true probability p:
         f* = (p - c) / (1 - c)
-
-    For buying NO at price (1-c) with true probability (1-p):
-        f* = ((1-p) - (1-c)) / c = (c - p) / c
 
     This is simplified because prediction markets always pay $1 on correct outcome.
     """

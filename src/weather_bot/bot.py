@@ -12,6 +12,7 @@ from .models import PortfolioState
 from .risk import apply_risk_controls
 from .telegram import format_daily_report, format_trade_alert, send_telegram
 from .trading import detect_signals, execute_signal
+from .verification import verify_all_cities
 from .weather import fetch_all_cities
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,13 @@ async def run_scan(
     )
     logger.info("Got forecasts for %d city-date combinations", len(forecasts))
 
-    # Step 4: Detect trading signals (edge > threshold)
-    signals = detect_signals(outcomes, forecasts, settings, portfolio)
+    # Step 3b: Cross-validate with multi-source deterministic forecasts
+    logger.info("Fetching multi-source verification forecasts...")
+    verified = await verify_all_cities(city_keys, dates)
+    logger.info("Got verified forecasts for %d city-date combinations", len(verified))
+
+    # Step 4: Detect trading signals (edge + outcome verification)
+    signals = detect_signals(outcomes, forecasts, settings, portfolio, verified=verified)
     if not signals:
         logger.info("No trading signals found (no sufficient edge)")
         return []
@@ -81,6 +87,10 @@ async def run_scan(
 
     for signal in signals:
         success = await execute_signal(signal, settings, dry_run=dry_run)
+        # Attach verification data if available
+        vf_key = (signal.outcome.city, signal.outcome.target_date)
+        vf = verified.get(vf_key)
+
         trade_result = {
             "city": signal.outcome.city,
             "date": signal.outcome.target_date.isoformat(),
@@ -91,6 +101,9 @@ async def run_scan(
             "edge": round(signal.edge * 100, 1),
             "size_usd": signal.position_size_usd,
             "executed": success,
+            "verified_temp": round(vf.mean_high, 1) if vf else None,
+            "verified_sources": vf.source_count if vf else 0,
+            "verified_agreement": round(vf.agreement_score * 100) if vf else 0,
         }
         results.append(trade_result)
 

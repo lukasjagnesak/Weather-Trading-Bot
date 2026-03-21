@@ -46,13 +46,23 @@ def format_trade_alert(trade: dict) -> str:
     emoji = "\U0001f7e2" if trade.get("executed") else "\U0001f534"
     arrow = "\u2b06" if trade["side"] == "BUY_YES" else "\u2b07"
 
-    return (
-        f"{emoji} <b>Trade {trade['side']}</b> {arrow}\n"
-        f"\U0001f3d9 {trade['city'].upper()} | {trade['date']}\n"
-        f"\U0001f321 Bucket: <code>{trade['bucket']}</code>\n"
-        f"\U0001f4ca Model: {trade['model_prob']:.1f}% vs Market: {trade['market_prob']:.1f}%\n"
-        f"\U0001f4b0 Edge: {trade['edge']:.1f}% | Size: ${trade['size_usd']:.2f}"
-    )
+    lines = [
+        f"{emoji} <b>Trade {trade['side']}</b> {arrow}",
+        f"\U0001f3d9 {trade['city'].upper()} | {trade['date']}",
+        f"\U0001f321 Bucket: <code>{trade['bucket']}</code>",
+        f"\U0001f4ca Model: {trade['model_prob']:.1f}% vs Market: {trade['market_prob']:.1f}%",
+        f"\U0001f4b0 Edge: {trade['edge']:.1f}% | Size: ${trade['size_usd']:.2f}",
+    ]
+
+    # Add verification info if available
+    if trade.get("verified_temp") is not None:
+        lines.append(
+            f"\U0001f4cd Verified: {trade['verified_temp']:.1f}\u00b0 "
+            f"({trade.get('verified_sources', '?')} sources, "
+            f"agreement {trade.get('verified_agreement', 0):.0f}%)"
+        )
+
+    return "\n".join(lines)
 
 
 def format_daily_report(
