@@ -114,91 +114,59 @@ def _verified_signal(
     city: str,
     target_date: date,
 ) -> Signal | None:
-    """Generate signal ONLY for high-confidence profitable bets.
+    """Generate signal using Gaussian probability from verified forecast.
+
+    Instead of binary in/out-of-bucket, compute the probability that the
+    actual temperature falls in each bucket using a Gaussian distribution
+    centered on the verified mean with sigma = forecast spread.
+
+    Example: verified=15.2°C, spread=0.8°C
+      → P(15°C bucket) ≈ 45%, P(14°C) ≈ 20%, P(16°C) ≈ 28%
+      → BUY_YES on 15°C if market < 45%, BUY_YES on 14°C if market < 20%
+      → BUY_NO on 13°C if NO price < our P(NOT 13°C) ≈ 97%
 
     Rules:
     - Max price 95c (minimum 5% profit on $1 payout)
-    - Only bet when we're confident in the outcome
-    - BUY_YES: verified temp is in this bucket + model confirms
-    - BUY_NO: verified temp is far from bucket + model confirms
-    - Skip uncertain/borderline cases
+    - BUY_YES when verified_prob > market price (bucket likely to win)
+    - BUY_NO when verified_prob_no > NO price (bucket likely to lose)
     """
     MAX_PRICE = 0.95  # never pay more than 95c → min 5% profit
 
     verified_temp = vf.mean_high
     bucket = outcome.bucket
 
-    in_bucket = _temp_in_bucket(verified_temp, bucket)
-    distance = _distance_from_bucket(verified_temp, bucket)
+    # Compute probability of this bucket using Gaussian on verified temp
+    # Sigma = forecast spread, minimum 0.5° to avoid overconfidence
+    sigma = max(vf.spread, 0.5)
+    bucket_prob = _gaussian_bucket_prob(verified_temp, sigma, bucket)
 
-    if in_bucket:
-        # ─── CORRECT BUCKET: BUY_YES ─────────────────────────────────
-        # We KNOW the temp will land here. Our true probability comes from
-        # verification agreement, not just the ensemble model.
-        # agreement 0.6 → ~75% sure, agreement 1.0 → ~95% sure
-        true_prob = 0.5 + 0.45 * vf.agreement_score  # 0.6→0.77, 0.9→0.905, 1.0→0.95
+    # Decide: BUY_YES or BUY_NO?
+    prob_no = 1.0 - bucket_prob
+    edge_yes = bucket_prob - market_prob
+    edge_no = prob_no - outcome.current_price_no
 
+    if edge_yes > edge_no and edge_yes > 0 and market_prob < MAX_PRICE:
+        # ─── BUY_YES: we think this bucket is more likely than market ──
         side = "BUY_YES"
         effective_price = market_prob
-
-        # Must be buyable under 95c
-        if effective_price > MAX_PRICE:
-            logger.debug(
-                "Verified YES %s %s but price %.0fc > 95c, skip",
-                city, bucket.label, effective_price * 100,
-            )
-            return None
-
-        edge = true_prob - effective_price
-        if edge <= 0:
-            logger.info(
-                "Verified YES %s %s but price %.0fc >= our confidence %.0f%%, skip",
-                city, bucket.label, effective_price * 100, true_prob * 100,
-            )
-            return None
-
+        edge = edge_yes
+        true_prob = bucket_prob
         tag = "VERIFIED-YES"
 
-    else:
-        # ─── WRONG BUCKET: BUY_NO ────────────────────────────────────
-        # Temp is NOT in this bucket. Confidence in NO depends on distance.
-
-        # Minimum distance: at least 2 degrees or 2× source spread
-        safe_margin = max(vf.spread * 2, 2.0)
-        if distance < safe_margin:
-            # Too close to bucket edge — uncertain, skip
-            return None
-
-        # True NO probability: scales with distance and agreement
-        # Far away + high agreement → near certain NO
-        distance_factor = min(1.0, distance / max(vf.spread * 4, 5.0))
-        true_prob_no = 0.6 + 0.35 * distance_factor * vf.agreement_score
-        true_prob = 1.0 - true_prob_no  # for Signal (prob of YES)
-
+    elif edge_no > 0 and outcome.current_price_no < MAX_PRICE:
+        # ─── BUY_NO: we think this bucket is less likely than market ───
         side = "BUY_NO"
         effective_price = outcome.current_price_no
-
-        # Must be buyable under 95c
-        if effective_price > MAX_PRICE:
-            logger.debug(
-                "Verified NO %s %s but NO price %.0fc > 95c, skip",
-                city, bucket.label, effective_price * 100,
-            )
-            return None
-
-        edge = true_prob_no - effective_price
-        if edge <= 0:
-            logger.info(
-                "Verified NO %s %s but NO price %.0fc >= confidence %.0f%%, skip",
-                city, bucket.label, effective_price * 100, true_prob_no * 100,
-            )
-            return None
-
+        edge = edge_no
+        true_prob = prob_no
         tag = "VERIFIED-NO"
 
-    # Kelly sizing — use verified true_prob, not model_prob
-    kelly_prob = true_prob if side == "BUY_YES" else true_prob_no
-    kelly_f = _kelly_fraction(kelly_prob, effective_price)
+    else:
+        # No profitable trade on either side
+        return None
+
+    # Kelly sizing
+    kelly_f = _kelly_fraction(true_prob, effective_price)
     if kelly_f <= 0:
         return None
 
@@ -223,11 +191,11 @@ def _verified_signal(
     )
 
     logger.info(
-        "[%s] %s %s | %s %s | verified=%.1f° dist=%.1f | "
-        "model=%.0f%% price=%.0fc edge=%.1f%% $%.2f",
+        "[%s] %s %s | %s %s | verified=%.1f° σ=%.1f bucket_prob=%.0f%% "
+        "price=%.0fc edge=%.1f%% $%.2f",
         tag, side, outcome.bucket.label, city, target_date,
-        verified_temp, distance,
-        model_prob * 100, effective_price * 100, edge * 100, position_size,
+        verified_temp, sigma, bucket_prob * 100,
+        effective_price * 100, edge * 100, position_size,
     )
 
     return signal
@@ -294,6 +262,24 @@ def _edge_signal(
     )
 
     return signal
+
+
+def _gaussian_bucket_prob(mean: float, sigma: float, bucket) -> float:
+    """Probability that temperature falls in this bucket, using Gaussian.
+
+    Computes P(lower <= T < upper) where T ~ N(mean, sigma²).
+    For tail buckets, computes P(T < upper) or P(T >= lower).
+    """
+    from scipy.stats import norm
+
+    if bucket.is_lower_tail:
+        return float(norm.cdf(bucket.upper, loc=mean, scale=sigma))
+    elif bucket.is_upper_tail:
+        return float(1.0 - norm.cdf(bucket.lower, loc=mean, scale=sigma))
+    else:
+        p_upper = float(norm.cdf(bucket.upper, loc=mean, scale=sigma))
+        p_lower = float(norm.cdf(bucket.lower, loc=mean, scale=sigma))
+        return p_upper - p_lower
 
 
 def _temp_in_bucket(temp: float, bucket) -> bool:
