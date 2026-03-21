@@ -133,14 +133,10 @@ def _verified_signal(
 
     if in_bucket:
         # ─── CORRECT BUCKET: BUY_YES ─────────────────────────────────
-        # Only if model also says this is likely (model+verification agree)
-        if model_prob < 0.15:
-            # Model says unlikely despite verification — disagreement, skip
-            logger.debug(
-                "Verified YES %s %s but model disagrees (%.0f%%), skipping",
-                city, bucket.label, model_prob * 100,
-            )
-            return None
+        # We KNOW the temp will land here. Our true probability comes from
+        # verification agreement, not just the ensemble model.
+        # agreement 0.6 → ~75% sure, agreement 1.0 → ~95% sure
+        true_prob = 0.5 + 0.45 * vf.agreement_score  # 0.6→0.77, 0.9→0.905, 1.0→0.95
 
         side = "BUY_YES"
         effective_price = market_prob
@@ -148,20 +144,24 @@ def _verified_signal(
         # Must be buyable under 95c
         if effective_price > MAX_PRICE:
             logger.debug(
-                "Verified YES %s %s but price %.0fc > 95c, no profit",
+                "Verified YES %s %s but price %.0fc > 95c, skip",
                 city, bucket.label, effective_price * 100,
             )
             return None
 
-        edge = model_prob - effective_price
+        edge = true_prob - effective_price
         if edge <= 0:
+            logger.info(
+                "Verified YES %s %s but price %.0fc >= our confidence %.0f%%, skip",
+                city, bucket.label, effective_price * 100, true_prob * 100,
+            )
             return None
 
         tag = "VERIFIED-YES"
 
     else:
-        # ─── WRONG BUCKET: only bet NO if we're truly confident ──────
-        # Need: temp far enough away AND model agrees it's unlikely
+        # ─── WRONG BUCKET: BUY_NO ────────────────────────────────────
+        # Temp is NOT in this bucket. Confidence in NO depends on distance.
 
         # Minimum distance: at least 2 degrees or 2× source spread
         safe_margin = max(vf.spread * 2, 2.0)
@@ -169,9 +169,11 @@ def _verified_signal(
             # Too close to bucket edge — uncertain, skip
             return None
 
-        if model_prob > 0.20:
-            # Model thinks there's a real chance — don't bet against it
-            return None
+        # True NO probability: scales with distance and agreement
+        # Far away + high agreement → near certain NO
+        distance_factor = min(1.0, distance / max(vf.spread * 4, 5.0))
+        true_prob_no = 0.6 + 0.35 * distance_factor * vf.agreement_score
+        true_prob = 1.0 - true_prob_no  # for Signal (prob of YES)
 
         side = "BUY_NO"
         effective_price = outcome.current_price_no
@@ -179,20 +181,24 @@ def _verified_signal(
         # Must be buyable under 95c
         if effective_price > MAX_PRICE:
             logger.debug(
-                "Verified NO %s %s but NO price %.0fc > 95c, no profit",
+                "Verified NO %s %s but NO price %.0fc > 95c, skip",
                 city, bucket.label, effective_price * 100,
             )
             return None
 
-        edge = (1.0 - model_prob) - effective_price
+        edge = true_prob_no - effective_price
         if edge <= 0:
+            logger.info(
+                "Verified NO %s %s but NO price %.0fc >= confidence %.0f%%, skip",
+                city, bucket.label, effective_price * 100, true_prob_no * 100,
+            )
             return None
 
         tag = "VERIFIED-NO"
 
-    # Kelly sizing
-    true_prob = model_prob if side == "BUY_YES" else 1.0 - model_prob
-    kelly_f = _kelly_fraction(true_prob, effective_price)
+    # Kelly sizing — use verified true_prob, not model_prob
+    kelly_prob = true_prob if side == "BUY_YES" else true_prob_no
+    kelly_f = _kelly_fraction(kelly_prob, effective_price)
     if kelly_f <= 0:
         return None
 
