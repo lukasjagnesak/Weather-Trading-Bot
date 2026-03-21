@@ -47,6 +47,10 @@ def detect_signals(
         confidence = ensemble_confidence(forecast_list)
 
         for outcome in city_outcomes:
+            # Skip illiquid markets (no real price discovery)
+            if outcome.volume < 50 and outcome.current_price_yes == 0.5:
+                continue
+
             model_prob = model_probs.get(outcome.bucket.label, 0.0)
             market_prob = outcome.current_price_yes
 
