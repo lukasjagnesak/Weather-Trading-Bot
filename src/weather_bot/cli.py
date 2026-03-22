@@ -413,6 +413,52 @@ def resolve(verbose: bool):
     asyncio.run(_resolve())
 
 
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.option("--days", "-d", type=int, default=7,
+              help="Number of days to backtest (default: 7)")
+@click.option("--cities", "-c", type=str, default="nyc,london,tokyo",
+              help="Comma-separated city keys")
+@click.option("--bankroll", type=float, default=1000.0, help="Simulated bankroll")
+@click.option("--min-edge", type=float, default=0.08, help="Minimum edge threshold")
+def backtest(verbose: bool, days: int, cities: str, bankroll: float, min_edge: float):
+    """Backtest the bot against historical weather data.
+
+    Simulates what the bot would have traded over the past N days
+    and shows win rate, P&L, and accuracy metrics.
+
+    Note: Market prices are simulated. Results measure forecast accuracy,
+    not exact historical returns.
+    """
+    _setup_logging(verbose)
+
+    async def _backtest():
+        from datetime import date, timedelta
+
+        from .backtest import format_backtest_report, run_backtest
+
+        city_list = [c.strip() for c in cities.split(",")]
+        end = date.today() - timedelta(days=2)  # need 2 days for data availability
+        start = end - timedelta(days=days - 1)
+
+        click.echo(f"\nBacktesting {days} days ({start} to {end})")
+        click.echo(f"Cities: {', '.join(c.upper() for c in city_list)}")
+        click.echo(f"Bankroll: ${bankroll:.2f} | Min edge: {min_edge:.0%}")
+        click.echo("Fetching historical data...\n")
+
+        result = await run_backtest(
+            cities=city_list,
+            start_date=start,
+            end_date=end,
+            bankroll=bankroll,
+            min_edge=min_edge,
+        )
+
+        click.echo(format_backtest_report(result))
+
+    asyncio.run(_backtest())
+
+
 @copy_group.command(name="enable")
 @click.argument("address")
 def copy_enable(address: str):
