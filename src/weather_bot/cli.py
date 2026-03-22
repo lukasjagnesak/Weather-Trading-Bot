@@ -459,6 +459,122 @@ def backtest(verbose: bool, days: int, cities: str, bankroll: float, min_edge: f
     asyncio.run(_backtest())
 
 
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+def preflight(verbose: bool):
+    """Run pre-flight checks before live trading.
+
+    Validates: API access, wallet config, market availability,
+    forecast data, risk parameters, and Telegram setup.
+    """
+    _setup_logging(verbose)
+    settings = Settings()
+    all_ok = True
+
+    def check(name: str, ok: bool, detail: str = ""):
+        nonlocal all_ok
+        status = "\u2705" if ok else "\u274c"
+        msg = f"  {status} {name}"
+        if detail:
+            msg += f" — {detail}"
+        click.echo(msg)
+        if not ok:
+            all_ok = False
+
+    click.echo("\n  PRE-FLIGHT CHECKS\n  " + "=" * 40 + "\n")
+
+    # 1. Trading mode
+    click.echo(f"  Mode: {settings.trading_mode.upper()}")
+    click.echo(f"  Bankroll: ${settings.bankroll:.2f}")
+    click.echo("")
+
+    # 2. Polymarket credentials
+    has_key = bool(settings.polymarket_private_key)
+    has_funder = bool(settings.polymarket_funder_address)
+    check("Private key configured", has_key,
+          "set" if has_key else "MISSING — set POLYMARKET_PRIVATE_KEY in .env")
+    check("Funder address configured", has_funder,
+          settings.polymarket_funder_address[:10] + "..." if has_funder
+          else "MISSING — set POLYMARKET_FUNDER_ADDRESS in .env")
+
+    # 3. py-clob-client
+    try:
+        import py_clob_client  # noqa: F401
+        check("py-clob-client installed", True)
+    except ImportError:
+        check("py-clob-client installed", False,
+              "pip install py-clob-client")
+
+    # 4. Polymarket API access
+    async def _check_api():
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(f"{settings.polymarket_gamma_url}/events",
+                                params={"tag_slug": "temperature", "limit": "1"})
+                r.raise_for_status()
+                events = r.json()
+                check("Polymarket API reachable", True,
+                      f"{len(events)} temperature event(s)")
+        except Exception as e:
+            check("Polymarket API reachable", False, str(e))
+
+    asyncio.run(_check_api())
+
+    # 5. Weather API
+    async def _check_weather():
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("https://api.open-meteo.com/v1/forecast",
+                                params={"latitude": 40.78, "longitude": -73.87,
+                                        "current": "temperature_2m"})
+                r.raise_for_status()
+                temp = r.json().get("current", {}).get("temperature_2m")
+                check("Open-Meteo API reachable", True, f"NYC current: {temp}°")
+        except Exception as e:
+            check("Open-Meteo API reachable", False, str(e))
+
+    asyncio.run(_check_weather())
+
+    # 6. Telegram
+    has_telegram = bool(settings.telegram_bot_token and settings.telegram_chat_id)
+    check("Telegram configured", has_telegram,
+          "alerts + daily report" if has_telegram
+          else "optional — set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID")
+
+    # 7. Risk parameters
+    click.echo("")
+    click.echo("  Risk Parameters:")
+    click.echo(f"    Min edge:         {settings.min_edge_threshold:.0%}")
+    click.echo(f"    Kelly fraction:   {settings.kelly_fraction:.0%}")
+    click.echo(f"    Max position:     {settings.max_position_pct:.0%} of bankroll "
+               f"(${settings.max_position_pct * settings.bankroll:.2f})")
+    click.echo(f"    Daily loss limit: {settings.daily_loss_limit_pct:.0%} "
+               f"(${settings.daily_loss_limit_pct * settings.bankroll:.2f})")
+    click.echo(f"    Max drawdown:     {settings.max_drawdown_pct:.0%}")
+    click.echo(f"    Scan interval:    {settings.scan_interval}s")
+    click.echo(f"    Cities:           {', '.join(settings.active_cities)}")
+
+    # 8. Trade database
+    from .evaluation import _get_db_path
+    db_path = _get_db_path()
+    check("\n  Trade database path", True, str(db_path))
+
+    # Summary
+    click.echo("\n  " + "=" * 40)
+    if settings.trading_mode == "paper":
+        click.echo("  Mode is PAPER — no real money will be used.")
+        click.echo("  To go live: set TRADING_MODE=live in .env")
+    elif all_ok:
+        click.echo("  \u2705 All checks passed — ready for LIVE trading!")
+        click.echo(f"  \u26a0\ufe0f  Bankroll: ${settings.bankroll:.2f} of REAL money")
+        click.echo("  Start with: weather-bot run --mode live")
+    else:
+        click.echo("  \u274c Some checks failed — fix issues above before going live.")
+    click.echo("")
+
+
 @copy_group.command(name="enable")
 @click.argument("address")
 def copy_enable(address: str):

@@ -1,0 +1,15 @@
+services:
+  weather-bot:
+    build: .
+    container_name: weather-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - WEATHER_BOT_DB=/data/trades.db
+    volumes:
+      - bot-data:/data
+    # Override CMD for live trading:
+    # command: ["run", "--mode", "live", "--verbose"]
+
+volumes:
+  bot-data:
