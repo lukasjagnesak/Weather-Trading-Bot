@@ -299,3 +299,48 @@ async def verify_all_cities(
 
     logger.info("Verified forecasts for %d city-date combinations", len(results))
     return results
+
+
+async def fetch_observed_temperature(
+    city_key: str,
+    target_date: date,
+) -> float | None:
+    """Fetch the actual observed daily high temperature for a past date.
+
+    Uses Open-Meteo Historical Weather API for dates in the past.
+    Returns the daily max temperature in the city's native unit, or None.
+    """
+    city = CITIES.get(city_key)
+    if not city:
+        logger.warning("Unknown city key: %s", city_key)
+        return None
+
+    temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
+            resp = await client.get(
+                "https://archive-api.open-meteo.com/v1/archive",
+                params={
+                    "latitude": city.latitude,
+                    "longitude": city.longitude,
+                    "daily": "temperature_2m_max",
+                    "start_date": target_date.isoformat(),
+                    "end_date": target_date.isoformat(),
+                    "temperature_unit": temp_unit,
+                    "timezone": "auto",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.warning("Failed to fetch observed temp for %s/%s: %s",
+                           city_key, target_date, e)
+            return None
+
+    daily = data.get("daily", {})
+    highs = daily.get("temperature_2m_max", [])
+    if highs and highs[0] is not None:
+        return float(highs[0])
+
+    return None

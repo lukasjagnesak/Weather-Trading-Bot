@@ -71,8 +71,13 @@ def format_daily_report(
     daily_pnl: float,
     peak_bankroll: float,
     tracked_wallets: int = 0,
+    performance=None,
 ) -> str:
-    """Format the daily summary report for Telegram."""
+    """Format the daily summary report for Telegram.
+
+    Args:
+        performance: Optional PerformanceMetrics from evaluation module.
+    """
     today = date.today().isoformat()
     drawdown = ((peak_bankroll - bankroll) / peak_bankroll * 100) if peak_bankroll > 0 else 0.0
 
@@ -102,6 +107,19 @@ def format_daily_report(
             )
     else:
         lines.append("\U0001f6ab No trades today")
+
+    # Performance metrics section
+    if performance and performance.resolved_trades > 0:
+        pnl_sign_all = "+" if performance.total_pnl >= 0 else ""
+        lines.extend([
+            "",
+            "\U0001f3af <b>Performance (all-time)</b>",
+            f"  Win rate: <b>{performance.win_rate:.1%}</b> ({performance.wins}W / {performance.losses}L)",
+            f"  Total P&L: <b>{pnl_sign_all}${performance.total_pnl:.2f}</b>",
+            f"  ROI: {performance.roi_pct:+.1f}%",
+            f"  Profit factor: {performance.profit_factor:.2f}",
+            f"  Pending: {performance.pending_trades}",
+        ])
 
     if tracked_wallets > 0:
         lines.append(f"\n\U0001f440 Copy-trade wallets: {tracked_wallets}")

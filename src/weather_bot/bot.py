@@ -7,6 +7,11 @@ import logging
 from datetime import date, datetime, timedelta
 
 from .config import Settings
+from .evaluation import (
+    get_performance_metrics,
+    record_trade,
+    resolve_pending_trades,
+)
 from .market import fetch_active_temperature_markets
 from .models import PortfolioState
 from .risk import apply_risk_controls
@@ -81,7 +86,7 @@ async def run_scan(
 
     logger.info("Executing %d signals after risk controls", len(signals))
 
-    # Step 6: Execute trades
+    # Step 6: Execute trades and record to database
     dry_run = settings.trading_mode == "paper"
     results = []
 
@@ -101,11 +106,23 @@ async def run_scan(
             "edge": round(signal.edge * 100, 1),
             "size_usd": signal.position_size_usd,
             "executed": success,
+            "confidence": signal.confidence,
             "verified_temp": round(vf.mean_high, 1) if vf else None,
             "verified_sources": vf.source_count if vf else 0,
             "verified_agreement": round(vf.agreement_score * 100) if vf else 0,
         }
         results.append(trade_result)
+
+        # Record trade to persistent database
+        if success:
+            try:
+                record_trade(
+                    trade_result,
+                    signal=signal,
+                    trading_mode=settings.trading_mode,
+                )
+            except Exception as e:
+                logger.warning("Failed to record trade: %s", e)
 
         # Send Telegram alert for each executed trade
         if settings.telegram_trade_alerts and success:
@@ -144,6 +161,21 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
             and now.hour >= settings.telegram_daily_report_hour
             and last_report_date != today
         ):
+            # Resolve pending trades from past dates
+            try:
+                resolved = await resolve_pending_trades()
+                if resolved:
+                    logger.info("Resolved %d pending trades", len(resolved))
+                    # Update portfolio P&L from resolved trades
+                    for r in resolved:
+                        portfolio.daily_pnl += r["pnl"]
+                        portfolio.bankroll += r["pnl"]
+                        portfolio.peak_bankroll = max(
+                            portfolio.peak_bankroll, portfolio.bankroll
+                        )
+            except Exception as e:
+                logger.warning("Failed to resolve pending trades: %s", e)
+
             try:
                 from .copytrading import load_wallets
 
@@ -151,12 +183,19 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
             except Exception:
                 tracked_count = 0
 
+            # Get performance metrics for the report
+            try:
+                perf = get_performance_metrics()
+            except Exception:
+                perf = None
+
             report = format_daily_report(
                 trades=all_trades_today,
                 bankroll=portfolio.bankroll,
                 daily_pnl=portfolio.daily_pnl,
                 peak_bankroll=portfolio.peak_bankroll,
                 tracked_wallets=tracked_count,
+                performance=perf,
             )
             try:
                 await send_telegram(report, settings)

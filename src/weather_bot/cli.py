@@ -293,6 +293,126 @@ def copy_positions(verbose: bool, wallet: str | None):
     asyncio.run(_fetch())
 
 
+@main.command()
+@click.option("--days", "-d", type=int, default=None,
+              help="Limit to last N days (default: all-time)")
+@click.option("--city", "-c", type=str, default=None,
+              help="Filter by city key")
+def stats(days: int | None, city: str | None):
+    """Show trading performance statistics (win rate, P&L, ROI, etc.)."""
+    from .evaluation import (
+        format_performance_report,
+        get_city_breakdown,
+        get_daily_pnl,
+        get_performance_metrics,
+    )
+
+    period = f"last {days} days" if days else "all-time"
+    if city:
+        period += f" ({city.upper()})"
+
+    m = get_performance_metrics(days=days, city=city)
+    click.echo(format_performance_report(m))
+
+    # City breakdown (only if not filtering by city)
+    if not city:
+        breakdown = get_city_breakdown(days=days)
+        if breakdown:
+            click.echo(f"\n  {'City':<12} {'Trades':>6} {'Wins':>5} {'WR%':>6} {'P&L':>10} {'ROI%':>7} {'Edge%':>7}")
+            click.echo(f"  {'-'*56}")
+            for c in breakdown:
+                wr = f"{c['win_rate']:.0%}"
+                click.echo(
+                    f"  {c['city'].upper():<12} {c['trades']:>6} {c['wins']:>5} "
+                    f"{wr:>6} ${c['total_pnl']:>+8.2f} {c['roi_pct']:>+6.1f}% "
+                    f"{c['avg_edge']:>6.1f}%"
+                )
+
+    # Daily P&L summary (last 10 days)
+    daily = get_daily_pnl(days=days or 30)
+    if daily:
+        click.echo(f"\n  {'Date':<12} {'Trades':>6} {'Wins':>5} {'P&L':>10} {'Cumulative':>12}")
+        click.echo(f"  {'-'*48}")
+        for d in daily[-10:]:
+            click.echo(
+                f"  {d['date']:<12} {d['trades']:>6} {d['wins']:>5} "
+                f"${d['pnl']:>+8.2f} ${d['cumulative_pnl']:>+10.2f}"
+            )
+
+
+@main.command()
+@click.option("--city", "-c", type=str, default=None, help="Filter by city key")
+@click.option("--outcome", "-o", type=click.Choice(["pending", "won", "lost"]),
+              default=None, help="Filter by outcome")
+@click.option("--limit", "-n", type=int, default=20, help="Number of trades to show")
+def trades(city: str | None, outcome: str | None, limit: int):
+    """List recorded trades with their outcomes."""
+    from .evaluation import get_trades
+
+    records = get_trades(city=city, outcome=outcome, limit=limit)
+
+    if not records:
+        click.echo("No trades found.")
+        return
+
+    click.echo(f"\n  {'#':>4} {'Date':<12} {'City':<10} {'Bucket':<12} {'Side':<9} "
+               f"{'Edge%':>6} {'Size$':>7} {'Result':>8} {'P&L$':>8}")
+    click.echo(f"  {'-'*80}")
+
+    for t in records:
+        if t.outcome == "won":
+            result = "\u2705 won"
+        elif t.outcome == "lost":
+            result = "\u274c lost"
+        else:
+            result = "\u23f3 ..."
+
+        click.echo(
+            f"  {t.id:>4} {t.target_date:<12} {t.city.upper():<10} "
+            f"{t.bucket_label:<12} {t.side:<9} "
+            f"{t.edge * 100:>5.1f}% ${t.position_size_usd:>6.2f} "
+            f"{result:>8} ${t.pnl:>+7.2f}"
+        )
+
+    # Summary line
+    total_pnl = sum(t.pnl for t in records if t.resolved)
+    wins = sum(1 for t in records if t.outcome == "won")
+    losses = sum(1 for t in records if t.outcome == "lost")
+    pending = sum(1 for t in records if t.outcome == "pending")
+    click.echo(f"\n  Total: {wins}W / {losses}L / {pending}P | P&L: ${total_pnl:+.2f}")
+
+
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+def resolve(verbose: bool):
+    """Resolve pending trades by fetching actual temperatures."""
+    _setup_logging(verbose)
+
+    async def _resolve():
+        from .evaluation import resolve_pending_trades
+
+        results = await resolve_pending_trades()
+
+        if not results:
+            click.echo("No pending trades to resolve (or actual temps not yet available).")
+            return
+
+        click.echo(f"\nResolved {len(results)} trade(s):\n")
+        for r in results:
+            emoji = "\u2705" if r["outcome"] == "won" else "\u274c"
+            click.echo(
+                f"  {emoji} #{r['trade_id']} {r['side']} {r['bucket']} "
+                f"| actual={r['actual_temp']:.1f}\u00b0 "
+                f"| P&L=${r['pnl']:+.2f}"
+            )
+
+        total_pnl = sum(r["pnl"] for r in results)
+        wins = sum(1 for r in results if r["outcome"] == "won")
+        click.echo(f"\n  {wins}/{len(results)} won | Total P&L: ${total_pnl:+.2f}")
+
+    asyncio.run(_resolve())
+
+
 @copy_group.command(name="enable")
 @click.argument("address")
 def copy_enable(address: str):
