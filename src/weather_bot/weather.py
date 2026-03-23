@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 
@@ -133,6 +134,7 @@ async def fetch_all_cities(
     async with httpx.AsyncClient(timeout=30.0) as client:
         for city_key in city_keys:
             for target_date in target_dates:
+                await asyncio.sleep(0.15)  # rate-limit Open-Meteo API
                 forecasts = await fetch_ensemble_forecast(
                     city_key, target_date, models=models, client=client
                 )

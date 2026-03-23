@@ -7,6 +7,7 @@ on the temperature, we have much higher confidence in the correct outcome.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -148,6 +149,7 @@ async def _fetch_open_meteo_models(
 
     for model in models:
         try:
+            await asyncio.sleep(0.15)  # rate-limit: ~6 req/s to avoid 429
             resp = await client.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
@@ -238,6 +240,7 @@ async def verify_forecast(
 
     try:
         # Source 1: Open-Meteo deterministic (best-guess)
+        await asyncio.sleep(0.15)
         det = await _fetch_open_meteo_deterministic(client, city_key, target_date)
         if det:
             sources.append(det)
@@ -249,6 +252,7 @@ async def verify_forecast(
         # Source 5: Current observation (same-day only — acts as floor for high temp)
         today = date.today()
         if target_date == today:
+            await asyncio.sleep(0.15)
             current_temp = await _fetch_current_observation(client, city_key)
             if current_temp is not None:
                 # Current temp is a lower bound for today's high
