@@ -79,6 +79,7 @@ async def _fetch_single_model(
     }
 
     try:
+        await asyncio.sleep(0.5)  # rate-limit: max 2 req/s for Open-Meteo free tier
         resp = await client.get(ENSEMBLE_API_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -134,7 +135,6 @@ async def fetch_all_cities(
     async with httpx.AsyncClient(timeout=30.0) as client:
         for city_key in city_keys:
             for target_date in target_dates:
-                await asyncio.sleep(0.15)  # rate-limit Open-Meteo API
                 forecasts = await fetch_ensemble_forecast(
                     city_key, target_date, models=models, client=client
                 )
