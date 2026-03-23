@@ -39,6 +39,7 @@ CITIES: dict[str, CityConfig] = {
     "atlanta": CityConfig("Atlanta", 33.6407, -84.4277, unit="fahrenheit"),
     "miami": CityConfig("Miami", 25.7959, -80.2870, unit="fahrenheit"),
     "sydney": CityConfig("Sydney", -33.8688, 151.2093, unit="celsius"),
+    "seattle": CityConfig("Seattle", 47.4502, -122.3088, unit="fahrenheit"),
     "wellington": CityConfig("Wellington", -41.3276, 174.8050, unit="celsius"),
     "taipei": CityConfig("Taipei", 25.0330, 121.5654, unit="celsius"),
     "lucknow": CityConfig("Lucknow", 26.8467, 80.9462, unit="celsius"),

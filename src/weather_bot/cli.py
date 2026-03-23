@@ -413,6 +413,48 @@ def resolve(verbose: bool):
     asyncio.run(_resolve())
 
 
+@main.command(name="backtest-real")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.option("--cities", "-c", type=str, default=None,
+              help="Comma-separated city keys (default: all available)")
+@click.option("--bankroll", type=float, default=1000.0, help="Simulated bankroll")
+@click.option("--min-edge", type=float, default=0.08, help="Minimum edge threshold")
+@click.option("--kelly", type=float, default=0.25, help="Kelly fraction (0-1)")
+@click.option("--max-pos", type=float, default=0.02, help="Max position % of bankroll")
+def backtest_real(verbose: bool, cities: str | None, bankroll: float,
+                  min_edge: float, kelly: float, max_pos: float):
+    """Backtest against REAL Polymarket resolved temperature markets.
+
+    Uses actual Polymarket bucket definitions, resolutions, and volumes.
+    Market prices are estimated from volume distribution.
+    """
+    _setup_logging(verbose)
+
+    async def _run():
+        from .backtest_real import format_real_backtest_report, run_real_backtest
+
+        city_list = [c.strip() for c in cities.split(",")] if cities else None
+
+        click.echo("\nFetching resolved Polymarket temperature events...")
+        click.echo(f"Bankroll: ${bankroll:.2f} | Min edge: {min_edge:.0%} | "
+                   f"Kelly: {kelly:.0%} | Max position: {max_pos:.0%}")
+        if city_list:
+            click.echo(f"Cities: {', '.join(c.upper() for c in city_list)}")
+        click.echo("")
+
+        result = await run_real_backtest(
+            bankroll=bankroll,
+            min_edge=min_edge,
+            kelly_fraction=kelly,
+            max_position_pct=max_pos,
+            cities_filter=city_list,
+        )
+
+        click.echo(format_real_backtest_report(result))
+
+    asyncio.run(_run())
+
+
 @main.command()
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.option("--days", "-d", type=int, default=7,
