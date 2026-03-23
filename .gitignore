@@ -6,7 +6,7 @@ dist/
 build/
 .eggs/
 *.egg
-.env
+# .env — tracked temporarily for server deployment
 .venv/
 venv/
 env/
