@@ -143,25 +143,52 @@ async def _fetch_historical_data(
         logger.warning("Failed to fetch archive for %s: %s", city_key, e)
         return {}
 
-    # 2) Fetch model forecasts via the forecast API
-    #    Use past_days + forecast_days=0 to get recent historical model data
-    past_days_count = (date.today() - start_date).days + 1
+    # 2) Fetch model forecasts
+    #    For recent data (<75 days), use forecast API with past_days.
+    #    For older data, use the archive API which has historical model runs.
     models = ["gfs_seamless", "ecmwf_ifs025", "icon_seamless"]
+    past_days_count = (date.today() - start_date).days + 1
+    use_archive = past_days_count > 70
+
     for model in models:
         try:
-            resp = await client.get(
-                "https://api.open-meteo.com/v1/forecast",
-                params={
-                    "latitude": city.latitude,
-                    "longitude": city.longitude,
-                    "daily": "temperature_2m_max",
-                    "models": model,
-                    "temperature_unit": temp_unit,
-                    "timezone": "auto",
-                    "past_days": past_days_count,
-                    "forecast_days": 0,
-                },
-            )
+            if use_archive:
+                # Archive API supports historical model reanalysis data
+                # Use ERA5 reanalysis as proxy for ECMWF, and model-specific
+                # archives where available
+                archive_model_map = {
+                    "ecmwf_ifs025": "ecmwf_ifs025",
+                    "gfs_seamless": "gfs_seamless",
+                    "icon_seamless": "icon_seamless",
+                }
+                archive_model = archive_model_map.get(model, model)
+                resp = await client.get(
+                    "https://archive-api.open-meteo.com/v1/archive",
+                    params={
+                        "latitude": city.latitude,
+                        "longitude": city.longitude,
+                        "daily": "temperature_2m_max",
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                        "temperature_unit": temp_unit,
+                        "timezone": "auto",
+                        "models": archive_model,
+                    },
+                )
+            else:
+                resp = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": city.latitude,
+                        "longitude": city.longitude,
+                        "daily": "temperature_2m_max",
+                        "models": model,
+                        "temperature_unit": temp_unit,
+                        "timezone": "auto",
+                        "past_days": past_days_count,
+                        "forecast_days": 0,
+                    },
+                )
             resp.raise_for_status()
             data = resp.json()
 
