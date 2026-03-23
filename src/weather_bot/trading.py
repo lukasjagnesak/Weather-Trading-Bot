@@ -145,7 +145,9 @@ def _verified_signal(
     edge_yes = bucket_prob - market_prob
     edge_no = prob_no - outcome.current_price_no
 
-    if edge_yes > edge_no and edge_yes > 0 and market_prob < MAX_PRICE:
+    MIN_PRICE = 0.02   # don't buy tokens under 2¢ (illiquid, negligible profit)
+
+    if edge_yes > edge_no and edge_yes > 0 and MIN_PRICE < market_prob < MAX_PRICE:
         # ─── BUY_YES: we think this bucket is more likely than market ──
         side = "BUY_YES"
         effective_price = market_prob
@@ -153,7 +155,7 @@ def _verified_signal(
         true_prob = bucket_prob
         tag = "VERIFIED-YES"
 
-    elif edge_no > 0 and outcome.current_price_no < MAX_PRICE:
+    elif edge_no > 0 and MIN_PRICE < outcome.current_price_no < MAX_PRICE:
         # ─── BUY_NO: we think this bucket is less likely than market ───
         side = "BUY_NO"
         effective_price = outcome.current_price_no
@@ -173,7 +175,7 @@ def _verified_signal(
     adjusted_kelly = kelly_f * settings.kelly_fraction * confidence
 
     position_size = adjusted_kelly * portfolio.bankroll
-    max_pct = min(settings.max_position_pct * 2, 0.05)
+    max_pct = min(settings.max_position_pct * 2, 0.10)
     position_size = min(position_size, max_pct * portfolio.bankroll)
 
     if position_size < 1.0:
@@ -369,15 +371,26 @@ async def execute_signal(
             token_id = signal.outcome.token_id_no
             price = signal.outcome.current_price_no
 
+        logger.debug(
+            "Order details: side=%s token_id=%s price=%.3f condition_id=%s market_id=%s",
+            signal.side, token_id[:40], price, signal.outcome.condition_id, signal.outcome.market_id,
+        )
+
         # Calculate number of shares
         size = signal.position_size_usd / price if price > 0 else 0
         if size < 1:
             logger.warning("Trade size too small: %.2f shares", size)
             return False
 
+        # Polymarket uses tick sizes of 0.001; ensure price is valid
+        price = round(price, 3)
+        if price < 0.01 or price > 0.99:
+            logger.warning("Price %.3f outside tradeable range, skipping", price)
+            return False
+
         order = OrderArgs(
             token_id=token_id,
-            price=round(price, 2),
+            price=price,
             size=round(size, 1),
             side=BUY,
         )

@@ -234,13 +234,29 @@ async def fetch_active_temperature_markets(
                 if not bucket:
                     continue
 
-                # Extract token IDs
-                clob_token_ids = market.get("clobTokenIds", [])
+                # Extract token IDs (API returns JSON string, not list)
+                raw_token_ids = market.get("clobTokenIds", [])
+                if isinstance(raw_token_ids, str):
+                    import json as _json
+                    try:
+                        clob_token_ids = _json.loads(raw_token_ids)
+                    except (ValueError, TypeError):
+                        continue
+                else:
+                    clob_token_ids = raw_token_ids
                 if not clob_token_ids or len(clob_token_ids) < 2:
                     continue
 
-                # Parse prices
-                outcome_prices = market.get("outcomePrices", ["0.5", "0.5"])
+                # Parse prices (API may also return JSON string)
+                raw_prices = market.get("outcomePrices", ["0.5", "0.5"])
+                if isinstance(raw_prices, str):
+                    import json as _json
+                    try:
+                        outcome_prices = _json.loads(raw_prices)
+                    except (ValueError, TypeError):
+                        outcome_prices = ["0.5", "0.5"]
+                else:
+                    outcome_prices = raw_prices
                 try:
                     price_yes = float(outcome_prices[0]) if outcome_prices else 0.5
                     price_no = float(outcome_prices[1]) if len(outcome_prices) > 1 else 1 - price_yes
