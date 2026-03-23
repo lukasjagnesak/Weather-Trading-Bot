@@ -371,37 +371,17 @@ def _models_to_ensemble(
     return forecasts
 
 
-def _compute_bucket_prob(
+def _compute_all_bucket_probs(
     forecasts: list[EnsembleForecast],
-    bucket: TemperatureBucket,
-) -> float:
-    """Compute EMOS-calibrated probability for a single bucket."""
-    model_weights = {
-        "gfs_seamless": 0.4,
-        "ecmwf_ifs025": 0.5,
-        "icon_seamless": 0.1,
-    }
-
-    total_p = 0.0
-    total_w = 0.0
-
-    for f in forecasts:
-        w = model_weights.get(f.model_name, 1.0 / len(forecasts))
-        members = np.array(f.members)
-        mu = float(np.mean(members))
-        sigma = max(float(np.std(members)) * 1.2, 0.5)
-
-        if bucket.is_lower_tail:
-            p = float(norm.cdf(bucket.upper, loc=mu, scale=sigma))
-        elif bucket.is_upper_tail:
-            p = float(1.0 - norm.cdf(bucket.lower, loc=mu, scale=sigma))
-        else:
-            p = float(norm.cdf(bucket.upper, loc=mu, scale=sigma) -
-                       norm.cdf(bucket.lower, loc=mu, scale=sigma))
-        total_p += w * max(p, 0.001)
-        total_w += w
-
-    return total_p / total_w if total_w > 0 else 0.0
+    buckets: list[TemperatureBucket],
+    city: str | None = None,
+    use_calibration: bool = True,
+) -> dict[str, float]:
+    """Compute probabilities for all buckets using the shared probability module."""
+    from .probability import compute_bucket_probabilities
+    return compute_bucket_probabilities(
+        forecasts, buckets, city=city if use_calibration else None,
+    )
 
 
 async def run_real_backtest(
@@ -410,6 +390,7 @@ async def run_real_backtest(
     kelly_fraction: float = 0.25,
     max_position_pct: float = 0.02,
     cities_filter: list[str] | None = None,
+    use_calibration: bool = True,
 ) -> RealBacktestResult:
     """Run backtest against real Polymarket resolved temperature markets.
 
@@ -490,15 +471,13 @@ async def run_real_backtest(
                     if tb:
                         parsed_buckets.append((b_info, tb))
 
-                # Normalize model probs
-                raw_probs = {}
-                for b_info, tb in parsed_buckets:
-                    raw_probs[b_info["label"]] = _compute_bucket_prob(forecasts, tb)
-
-                total_model_p = sum(raw_probs.values())
-                model_probs = {}
-                for k, v in raw_probs.items():
-                    model_probs[k] = v / total_model_p if total_model_p > 0 else 1.0 / len(raw_probs)
+                # Use shared calibration-aware probability module
+                tb_list = [tb for _, tb in parsed_buckets]
+                model_probs = _compute_all_bucket_probs(
+                    forecasts, tb_list,
+                    city=city_key,
+                    use_calibration=use_calibration,
+                )
 
                 had_signal = False
 

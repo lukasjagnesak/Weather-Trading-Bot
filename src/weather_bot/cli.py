@@ -413,6 +413,43 @@ def resolve(verbose: bool):
     asyncio.run(_resolve())
 
 
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.option("--cities", "-c", type=str, default=None,
+              help="Comma-separated city keys (default: all)")
+@click.option("--save/--no-save", default=True, help="Save calibration to file")
+def calibrate(verbose: bool, cities: str | None, save: bool):
+    """Calibrate EMOS model using real Polymarket resolutions.
+
+    Learns optimal spread inflation, model bias correction, and model weights
+    from 460+ resolved temperature events. Saves parameters for live trading.
+    """
+    _setup_logging(verbose)
+
+    async def _run():
+        from .calibration import (
+            format_calibration_report,
+            run_calibration,
+            save_calibration,
+        )
+
+        city_list = [c.strip() for c in cities.split(",")] if cities else None
+
+        click.echo("\nCalibrating EMOS parameters from Polymarket history...")
+        if city_list:
+            click.echo(f"Cities: {', '.join(c.upper() for c in city_list)}")
+        click.echo("")
+
+        result = await run_calibration(cities_filter=city_list)
+        click.echo(format_calibration_report(result))
+
+        if save:
+            path = save_calibration(result)
+            click.echo(f"  Saved calibration to {path}")
+
+    asyncio.run(_run())
+
+
 @main.command(name="backtest-real")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.option("--cities", "-c", type=str, default=None,
