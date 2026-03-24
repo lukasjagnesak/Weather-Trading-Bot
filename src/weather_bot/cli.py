@@ -698,6 +698,45 @@ def preflight(verbose: bool):
     click.echo("")
 
 
+@main.command()
+def balance():
+    """Check USDC collateral balance on Polymarket."""
+    settings = Settings()
+
+    if not settings.polymarket_private_key or not settings.polymarket_funder_address:
+        click.echo("Wallet not configured. Run: weather-bot set-wallet <KEY> --funder <ADDR>")
+        return
+
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import BalanceAllowanceParams
+
+        client = ClobClient(
+            settings.polymarket_clob_url,
+            key=settings.polymarket_private_key,
+            chain_id=137,
+            signature_type=0,
+            funder=settings.polymarket_funder_address,
+        )
+        creds = client.create_or_derive_api_creds()
+        client.set_api_creds(creds)
+
+        params = BalanceAllowanceParams(asset_type="COLLATERAL")
+        bal = client.get_balance_allowance(params)
+        collateral = int(bal.get("balance", "0")) / 1_000_000
+        allowance = int(bal.get("allowance", "0")) / 1_000_000
+
+        click.echo(f"\n  Wallet Balance")
+        click.echo(f"  {'=' * 35}")
+        click.echo(f"  Funder:     {settings.polymarket_funder_address}")
+        click.echo(f"  Collateral: ${collateral:.2f} USDC")
+        click.echo(f"  Allowance:  ${allowance:.2f} USDC")
+        click.echo(f"  Bankroll:   ${settings.bankroll:.2f} (configured)")
+        click.echo("")
+    except Exception as e:
+        click.echo(f"Error checking balance: {e}")
+
+
 @copy_group.command(name="enable")
 @click.argument("address")
 def copy_enable(address: str):
