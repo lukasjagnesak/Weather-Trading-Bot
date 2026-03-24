@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 ENSEMBLE_API_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
+# Cache: ensemble API updates every 6-12h, no need to re-fetch every 5 min
+_forecast_cache: dict[str, tuple[datetime, dict[tuple[str, date], list["EnsembleForecast"]]]] = {}
+CACHE_TTL_MINUTES = 30
+
 # Ensemble model configs: (model_name, num_members)
 ENSEMBLE_MODELS = {
     "gfs_seamless": 31,
@@ -282,6 +286,7 @@ async def fetch_all_cities(
 
     Batches all cities into a single multi-location request per model,
     grouped by temperature unit. Typically just 3-4 API requests total.
+    Results are cached for 30 minutes (ensemble models update every 6-12h).
 
     Returns a dict keyed by (city_key, target_date).
     """
@@ -290,6 +295,25 @@ async def fetch_all_cities(
         target_dates = [today, today + timedelta(days=1), today + timedelta(days=2)]
     if models is None:
         models = ["gfs_seamless", "ecmwf_ifs025"]
+
+    # Build cache key from sorted inputs
+    cache_key = (
+        ",".join(sorted(city_keys))
+        + "|" + ",".join(d.isoformat() for d in sorted(target_dates))
+        + "|" + ",".join(sorted(models))
+    )
+
+    # Return cached result if fresh enough
+    now = datetime.utcnow()
+    if cache_key in _forecast_cache:
+        cached_at, cached_result = _forecast_cache[cache_key]
+        age_min = (now - cached_at).total_seconds() / 60
+        if age_min < CACHE_TTL_MINUTES:
+            logger.info(
+                "Using cached forecasts (%.0f min old, TTL=%d min)",
+                age_min, CACHE_TTL_MINUTES,
+            )
+            return cached_result
 
     # Group cities by temperature unit (fahrenheit vs celsius)
     unit_groups: dict[str, list[str]] = {}
@@ -307,5 +331,10 @@ async def fetch_all_cities(
                 )
                 for key, forecast in batch.items():
                     results.setdefault(key, []).append(forecast)
+
+    # Cache results (only if we got data)
+    if results:
+        _forecast_cache[cache_key] = (now, results)
+        logger.info("Cached %d forecast results for %d min", len(results), CACHE_TTL_MINUTES)
 
     return results
