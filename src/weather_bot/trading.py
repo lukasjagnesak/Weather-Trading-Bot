@@ -4,6 +4,10 @@ Two signal strategies:
 1. EDGE-BASED: traditional mispricing detection (model prob vs market price)
 2. OUTCOME-FOCUSED: when we have verified forecast data, we know the answer
    for EVERY bucket — bet YES on the correct one, NO on all others.
+
+SAFETY: This bot MUST NEVER withdraw, transfer, or send funds to any wallet.
+The only permitted on-chain action is placing BUY orders on Polymarket.
+All deposits and withdrawals must be done manually by the user.
 """
 
 from __future__ import annotations
@@ -17,6 +21,39 @@ from .probability import compute_bucket_probabilities, ensemble_confidence
 from .verification import VerifiedForecast
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# SAFETY: Forbidden operations — the bot must NEVER move funds out of the
+# account.  This list covers known py_clob_client / on-chain methods that
+# could withdraw, transfer, or approve spending of user funds.
+# ---------------------------------------------------------------------------
+_BLOCKED_CLIENT_METHODS = frozenset({
+    "withdraw",
+    "transfer",
+    "transfer_from",
+    "send_transaction",
+    "send_raw_transaction",
+    "approve",
+    "cancel_all",
+    "withdraw_collateral",
+    "withdraw_funds",
+})
+
+
+class _SafeClobClient:
+    """Thin wrapper that blocks any withdraw / transfer calls."""
+
+    def __init__(self, inner):  # noqa: ANN001
+        self._inner = inner
+
+    def __getattr__(self, name: str):  # noqa: ANN204
+        if name in _BLOCKED_CLIENT_METHODS:
+            raise PermissionError(
+                f"BLOCKED: '{name}' is forbidden — this bot must never "
+                f"withdraw or transfer funds.  All withdrawals must be "
+                f"done manually by the user."
+            )
+        return getattr(self._inner, name)
 
 
 def detect_signals(
@@ -354,14 +391,16 @@ async def execute_signal(
         from py_clob_client.clob_types import OrderArgs, OrderType
         from py_clob_client.order_builder.constants import BUY
 
-        client = ClobClient(
+        raw_client = ClobClient(
             settings.polymarket_clob_url,
             key=settings.polymarket_private_key,
             chain_id=137,
             signature_type=settings.polymarket_signature_type,
             funder=settings.polymarket_funder_address,
         )
-        client.set_api_creds(client.create_or_derive_api_creds())
+        raw_client.set_api_creds(raw_client.create_or_derive_api_creds())
+        # Wrap with safety guard — blocks withdraw/transfer calls
+        client = _SafeClobClient(raw_client)
 
         # Determine token and price
         if signal.side == "BUY_YES":
