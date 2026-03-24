@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+import numpy as np
+
 from .config import Settings
 from .models import EnsembleForecast, MarketOutcome, PortfolioState, Signal
 from .probability import compute_bucket_probabilities, ensemble_confidence
@@ -86,6 +88,15 @@ def detect_signals(
         if not forecast_list:
             logger.debug("No forecasts for %s/%s, skipping", city, target_date)
             continue
+
+        # Log ensemble forecast details per model so we can verify correctness
+        for fc in forecast_list:
+            logger.info(
+                "FORECAST %s %s/%s: model=%s members=%d mean=%.1f std=%.1f min=%.1f max=%.1f",
+                fc.unit, city, target_date, fc.model_name,
+                len(fc.members), np.mean(fc.members), np.std(fc.members),
+                np.min(fc.members), np.max(fc.members),
+            )
 
         # Compute probabilities for all buckets at once
         buckets = [o.bucket for o in city_outcomes]
