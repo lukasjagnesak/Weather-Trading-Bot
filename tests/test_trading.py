@@ -93,16 +93,18 @@ class TestDetectSignals:
         portfolio = PortfolioState(bankroll=1000.0, peak_bankroll=1000.0)
 
         # Provide a full set of buckets so probabilities distribute properly
-        # With mean=59 and spread=3, the 58-59 bucket gets ~20-25% probability
+        # With mean=59 and spread=3, approximate model probs:
+        # ≤55 ~15%, 56-57 ~18%, 58-59 ~36%, 60-61 ~22%, ≥62 ~9%
+        # Set market prices close to these so edge < 8%
         import numpy as np
         np.random.seed(42)
         members = list(np.random.normal(59, 3, 31))
         outcomes = [
-            self._make_outcome("nyc", date(2026, 3, 20), "≤55", float("-inf"), 55.5, 0.15),
-            self._make_outcome("nyc", date(2026, 3, 20), "56-57", 55.5, 57.5, 0.20),
-            self._make_outcome("nyc", date(2026, 3, 20), "58-59", 57.5, 59.5, 0.25),
-            self._make_outcome("nyc", date(2026, 3, 20), "60-61", 59.5, 61.5, 0.25),
-            self._make_outcome("nyc", date(2026, 3, 20), "≥62", 61.5, float("inf"), 0.15),
+            self._make_outcome("nyc", date(2026, 3, 20), "≤55", float("-inf"), 55.5, 0.12),
+            self._make_outcome("nyc", date(2026, 3, 20), "56-57", 55.5, 57.5, 0.18),
+            self._make_outcome("nyc", date(2026, 3, 20), "58-59", 57.5, 59.5, 0.35),
+            self._make_outcome("nyc", date(2026, 3, 20), "60-61", 59.5, 61.5, 0.22),
+            self._make_outcome("nyc", date(2026, 3, 20), "≥62", 61.5, float("inf"), 0.13),
         ]
         # Set tail bucket flags
         outcomes[0].bucket.is_lower_tail = True

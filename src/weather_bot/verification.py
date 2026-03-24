@@ -303,7 +303,7 @@ async def verify_all_cities(
     )
     if cache_key in _verification_cache:
         cached_time, cached_results = _verification_cache[cache_key]
-        age_minutes = (datetime.now() - cached_time).total_seconds() / 60
+        age_minutes = (datetime.utcnow() - cached_time).total_seconds() / 60
         if age_minutes < _VERIFICATION_CACHE_TTL_MINUTES:
             logger.info(
                 "Using cached verification forecasts (%.0f min old, TTL=%d min)",
@@ -313,15 +313,21 @@ async def verify_all_cities(
 
     results: dict[tuple[str, date], VerifiedForecast] = {}
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        for city_key in city_keys:
-            for target_date in target_dates:
-                vf = await verify_forecast(city_key, target_date, client=client)
-                if vf.sources:
-                    results[(city_key, target_date)] = vf
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for city_key in city_keys:
+                for target_date in target_dates:
+                    try:
+                        vf = await verify_forecast(city_key, target_date, client=client)
+                        if vf.sources:
+                            results[(city_key, target_date)] = vf
+                    except Exception as e:
+                        logger.debug("Verification failed for %s/%s: %s", city_key, target_date, e)
+    except Exception as e:
+        logger.warning("Verification batch failed: %s", e)
 
     if results:
-        _verification_cache[cache_key] = (datetime.now(), results)
+        _verification_cache[cache_key] = (datetime.utcnow(), results)
 
     logger.info("Verified forecasts for %d city-date combinations", len(results))
     return results

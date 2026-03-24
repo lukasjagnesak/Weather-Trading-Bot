@@ -160,7 +160,6 @@ async def _fetch_model_batch(
     city_key: str,
     target_dates: list[date],
     model: str,
-    max_retries: int = 4,
 ) -> dict[date, EnsembleForecast]:
     """Fetch a single model forecast for multiple dates in one request."""
     temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
@@ -177,27 +176,19 @@ async def _fetch_model_batch(
         "timezone": "auto",
     }
 
-    data = None
-    for attempt in range(max_retries):
-        try:
-            await asyncio.sleep(1.0)  # brief courtesy delay
-            resp = await client.get(ENSEMBLE_API_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429 and attempt < max_retries - 1:
-                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s, 240s
-                logger.warning("Rate limited on %s/%s, retrying in %ds...", model, city_key, wait)
-                await asyncio.sleep(wait)
-                continue
+    try:
+        await asyncio.sleep(1.0)  # brief courtesy delay
+        resp = await client.get(ENSEMBLE_API_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            logger.warning("Rate limited on %s/%s — will use cache", model, city_key)
+        else:
             logger.error("Failed to fetch %s forecast for %s: %s", model, city_key, e)
-            return {}
-        except (httpx.HTTPError, ValueError) as e:
-            logger.error("Failed to fetch %s forecast for %s: %s", model, city_key, e)
-            return {}
-
-    if data is None:
+        return {}
+    except (httpx.HTTPError, ValueError) as e:
+        logger.error("Failed to fetch %s forecast for %s: %s", model, city_key, e)
         return {}
 
     daily = data.get("daily", {})
@@ -251,7 +242,6 @@ async def _fetch_multi_city_model(
     city_keys: list[str],
     target_dates: list[date],
     model: str,
-    max_retries: int = 4,
 ) -> dict[tuple[str, date], EnsembleForecast]:
     """Fetch one model for ALL cities+dates in a single API request.
 
@@ -279,27 +269,19 @@ async def _fetch_multi_city_model(
         "timezone": "auto",
     }
 
-    data = None
-    for attempt in range(max_retries):
-        try:
-            await asyncio.sleep(1.0)  # brief courtesy delay
-            resp = await client.get(ENSEMBLE_API_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429 and attempt < max_retries - 1:
-                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
-                logger.warning("Rate limited on %s, retrying in %ds...", model, wait)
-                await asyncio.sleep(wait)
-                continue
+    try:
+        await asyncio.sleep(1.0)  # brief courtesy delay
+        resp = await client.get(ENSEMBLE_API_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            logger.warning("Rate limited on %s — will use cache", model)
+        else:
             logger.error("Failed to fetch %s multi-city forecast: %s", model, e)
-            return {}
-        except (httpx.HTTPError, ValueError) as e:
-            logger.error("Failed to fetch %s multi-city forecast: %s", model, e)
-            return {}
-
-    if data is None:
+        return {}
+    except (httpx.HTTPError, ValueError) as e:
+        logger.error("Failed to fetch %s multi-city forecast: %s", model, e)
         return {}
 
     # For a single city, API returns {daily: ...}
@@ -366,10 +348,11 @@ async def fetch_all_cities(
 ) -> dict[tuple[str, date], list[EnsembleForecast]]:
     """Fetch ensemble forecasts for multiple cities and dates.
 
-    Batches all cities into a single multi-location request per model,
-    grouped by temperature unit. Typically just 3-4 API requests total.
-    Results are cached to disk for 30 minutes (ensemble models update every 6-12h).
-    Falls back to stale cache (up to 6h) if the API is rate-limited.
+    Strategy (fail-fast, never block on retries):
+    1. Return fresh cache if available (< 6h old)
+    2. Try API once per model — no retries on 429
+    3. If API fails, use stale cache (up to 12h)
+    4. If no cache at all, build synthetic forecasts from deterministic API
 
     Returns a dict keyed by (city_key, target_date).
     """
@@ -386,12 +369,12 @@ async def fetch_all_cities(
         + "|" + ",".join(sorted(models))
     )
 
-    # Return fresh cached result (< 30 min old)
+    # 1. Return fresh cached result (< 6h old)
     cached = _load_cache(cache_key, CACHE_TTL_MINUTES)
     if cached is not None:
         return cached
 
-    # Group cities by temperature unit (fahrenheit vs celsius)
+    # 2. Try ensemble API (one attempt per model, no retries)
     unit_groups: dict[str, list[str]] = {}
     for ck in city_keys:
         unit = CITIES[ck].unit
@@ -411,13 +394,12 @@ async def fetch_all_cities(
                 for key, forecast in batch.items():
                     results.setdefault(key, []).append(forecast)
 
-    # If we got data, save to disk cache
     if results:
         _save_cache(cache_key, results)
         logger.info("Cached %d forecast results to disk (TTL=%d min)", len(results), CACHE_TTL_MINUTES)
         return results
 
-    # API failed (rate-limited) — fall back to stale cache up to 6 hours old
+    # 3. API failed — use stale cache (up to 12h)
     if rate_limited:
         stale = _load_cache(cache_key, CACHE_STALE_TTL_MINUTES)
         if stale is not None:
@@ -426,6 +408,87 @@ async def fetch_all_cities(
                 CACHE_STALE_TTL_MINUTES,
             )
             return stale
-        logger.error("API rate-limited and no cached forecasts available")
+
+    # 4. No cache available — build synthetic ensemble from deterministic API
+    # The deterministic (non-ensemble) API has separate, more generous rate limits
+    logger.warning("No ensemble data or cache — falling back to deterministic API")
+    results = await _build_synthetic_ensemble(city_keys, target_dates)
+    if results:
+        _save_cache(cache_key, results)
+        logger.info("Built synthetic ensemble from deterministic API for %d combinations", len(results))
+
+    return results
+
+
+async def _build_synthetic_ensemble(
+    city_keys: list[str],
+    target_dates: list[date],
+) -> dict[tuple[str, date], list[EnsembleForecast]]:
+    """Build synthetic ensemble forecasts from deterministic API.
+
+    Uses the free (non-ensemble) Open-Meteo API which has separate rate limits.
+    Creates a synthetic spread around the deterministic forecast.
+    """
+    results: dict[tuple[str, date], list[EnsembleForecast]] = {}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for city_key in city_keys:
+            city = CITIES.get(city_key)
+            if not city:
+                continue
+
+            temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
+            sorted_dates = sorted(target_dates)
+
+            try:
+                await asyncio.sleep(0.5)
+                resp = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": city.latitude,
+                        "longitude": city.longitude,
+                        "daily": "temperature_2m_max",
+                        "start_date": sorted_dates[0].isoformat(),
+                        "end_date": sorted_dates[-1].isoformat(),
+                        "temperature_unit": temp_unit,
+                        "timezone": "auto",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except (httpx.HTTPError, ValueError) as e:
+                logger.debug("Deterministic fallback failed for %s: %s", city_key, e)
+                continue
+
+            daily = data.get("daily", {})
+            api_dates = daily.get("time", [])
+            highs = daily.get("temperature_2m_max", [])
+
+            for i, d_str in enumerate(api_dates):
+                try:
+                    d = date.fromisoformat(d_str)
+                except ValueError:
+                    continue
+                if d not in target_dates or i >= len(highs) or highs[i] is None:
+                    continue
+
+                high = float(highs[i])
+                # Create synthetic ensemble: spread of ~2° around deterministic
+                # This gives reasonable probability distributions
+                spread = 2.0 if temp_unit == "celsius" else 3.5
+                members = [high + (j - 15) * spread / 15 for j in range(31)]
+
+                forecast = EnsembleForecast(
+                    city=city_key,
+                    target_date=d,
+                    model_name="deterministic_fallback",
+                    members=members,
+                    unit=city.unit,
+                )
+                results[(city_key, d)] = [forecast]
+                logger.info(
+                    "Deterministic fallback for %s on %s: high=%.1f° (synthetic spread=%.1f)",
+                    city_key, d, high, spread,
+                )
 
     return results

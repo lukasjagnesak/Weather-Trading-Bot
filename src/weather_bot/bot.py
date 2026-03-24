@@ -65,6 +65,10 @@ async def run_scan(
     )
     logger.info("Got forecasts for %d city-date combinations", len(forecasts))
 
+    if not forecasts:
+        logger.warning("No forecast data available — skipping this scan")
+        return []
+
     # Step 3b: Cross-validate with multi-source deterministic forecasts
     logger.info("Fetching multi-source verification forecasts...")
     verified = await verify_all_cities(city_keys, dates)
