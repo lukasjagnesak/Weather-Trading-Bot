@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -16,9 +18,89 @@ logger = logging.getLogger(__name__)
 
 ENSEMBLE_API_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
-# Cache: ensemble API updates every 6-12h, no need to re-fetch every 5 min
-_forecast_cache: dict[str, tuple[datetime, dict[tuple[str, date], list["EnsembleForecast"]]]] = {}
+# Disk-based cache: survives restarts, ensemble models update every 6-12h
+_CACHE_DIR = Path.home() / ".weather_bot"
+_CACHE_FILE = _CACHE_DIR / "forecast_cache.json"
 CACHE_TTL_MINUTES = 30
+CACHE_STALE_TTL_MINUTES = 360  # 6 hours — fallback when rate-limited
+
+
+def _save_cache(
+    cache_key: str,
+    results: dict[tuple[str, date], list[EnsembleForecast]],
+) -> None:
+    """Persist forecast results to disk."""
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # Load existing cache entries
+        cache_data = {}
+        if _CACHE_FILE.exists():
+            cache_data = json.loads(_CACHE_FILE.read_text())
+
+        # Serialize forecasts
+        serialized = {}
+        for (city, d), forecasts in results.items():
+            key = f"{city}|{d.isoformat()}"
+            serialized[key] = [
+                {
+                    "city": f.city,
+                    "target_date": f.target_date.isoformat(),
+                    "model_name": f.model_name,
+                    "members": f.members,
+                    "unit": f.unit,
+                    "fetched_at": f.fetched_at.isoformat(),
+                }
+                for f in forecasts
+            ]
+
+        cache_data[cache_key] = {
+            "cached_at": datetime.utcnow().isoformat(),
+            "forecasts": serialized,
+        }
+        _CACHE_FILE.write_text(json.dumps(cache_data))
+    except Exception as e:
+        logger.debug("Failed to save forecast cache: %s", e)
+
+
+def _load_cache(
+    cache_key: str, max_age_minutes: float,
+) -> dict[tuple[str, date], list[EnsembleForecast]] | None:
+    """Load forecast results from disk if fresh enough."""
+    try:
+        if not _CACHE_FILE.exists():
+            return None
+        cache_data = json.loads(_CACHE_FILE.read_text())
+        entry = cache_data.get(cache_key)
+        if not entry:
+            return None
+
+        cached_at = datetime.fromisoformat(entry["cached_at"])
+        age_min = (datetime.utcnow() - cached_at).total_seconds() / 60
+        if age_min > max_age_minutes:
+            return None
+
+        results: dict[tuple[str, date], list[EnsembleForecast]] = {}
+        for combo_key, forecast_list in entry["forecasts"].items():
+            city, date_str = combo_key.split("|", 1)
+            d = date.fromisoformat(date_str)
+            results[(city, d)] = [
+                EnsembleForecast(
+                    city=f["city"],
+                    target_date=date.fromisoformat(f["target_date"]),
+                    model_name=f["model_name"],
+                    members=f["members"],
+                    unit=f["unit"],
+                    fetched_at=datetime.fromisoformat(f["fetched_at"]),
+                )
+                for f in forecast_list
+            ]
+
+        logger.info("Loaded cached forecasts (%.0f min old, max_age=%d min)", age_min, max_age_minutes)
+        return results
+    except Exception as e:
+        logger.debug("Failed to load forecast cache: %s", e)
+        return None
+
 
 # Ensemble model configs: (model_name, num_members)
 ENSEMBLE_MODELS = {
@@ -207,7 +289,7 @@ async def _fetch_multi_city_model(
             break
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429 and attempt < max_retries - 1:
-                wait = 15 * (attempt + 1)  # 15s, 30s, 45s
+                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s
                 logger.warning("Rate limited on %s, retrying in %ds...", model, wait)
                 await asyncio.sleep(wait)
                 continue
@@ -286,7 +368,8 @@ async def fetch_all_cities(
 
     Batches all cities into a single multi-location request per model,
     grouped by temperature unit. Typically just 3-4 API requests total.
-    Results are cached for 30 minutes (ensemble models update every 6-12h).
+    Results are cached to disk for 30 minutes (ensemble models update every 6-12h).
+    Falls back to stale cache (up to 6h) if the API is rate-limited.
 
     Returns a dict keyed by (city_key, target_date).
     """
@@ -303,17 +386,10 @@ async def fetch_all_cities(
         + "|" + ",".join(sorted(models))
     )
 
-    # Return cached result if fresh enough
-    now = datetime.utcnow()
-    if cache_key in _forecast_cache:
-        cached_at, cached_result = _forecast_cache[cache_key]
-        age_min = (now - cached_at).total_seconds() / 60
-        if age_min < CACHE_TTL_MINUTES:
-            logger.info(
-                "Using cached forecasts (%.0f min old, TTL=%d min)",
-                age_min, CACHE_TTL_MINUTES,
-            )
-            return cached_result
+    # Return fresh cached result (< 30 min old)
+    cached = _load_cache(cache_key, CACHE_TTL_MINUTES)
+    if cached is not None:
+        return cached
 
     # Group cities by temperature unit (fahrenheit vs celsius)
     unit_groups: dict[str, list[str]] = {}
@@ -322,6 +398,7 @@ async def fetch_all_cities(
         unit_groups.setdefault(unit, []).append(ck)
 
     results: dict[tuple[str, date], list[EnsembleForecast]] = {}
+    rate_limited = False
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for model in models:
@@ -329,12 +406,26 @@ async def fetch_all_cities(
                 batch = await _fetch_multi_city_model(
                     client, group_keys, target_dates, model
                 )
+                if not batch:
+                    rate_limited = True
                 for key, forecast in batch.items():
                     results.setdefault(key, []).append(forecast)
 
-    # Cache results (only if we got data)
+    # If we got data, save to disk cache
     if results:
-        _forecast_cache[cache_key] = (now, results)
-        logger.info("Cached %d forecast results for %d min", len(results), CACHE_TTL_MINUTES)
+        _save_cache(cache_key, results)
+        logger.info("Cached %d forecast results to disk (TTL=%d min)", len(results), CACHE_TTL_MINUTES)
+        return results
+
+    # API failed (rate-limited) — fall back to stale cache up to 6 hours old
+    if rate_limited:
+        stale = _load_cache(cache_key, CACHE_STALE_TTL_MINUTES)
+        if stale is not None:
+            logger.warning(
+                "API rate-limited — using stale cached forecasts (up to %d min old)",
+                CACHE_STALE_TTL_MINUTES,
+            )
+            return stale
+        logger.error("API rate-limited and no cached forecasts available")
 
     return results
