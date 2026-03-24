@@ -86,16 +86,13 @@ class TestDetectSignals:
         bucket_labels = [s.outcome.bucket.label for s in signals]
         assert "58-59" in bucket_labels
 
-    def test_no_signals_when_fairly_priced(self):
-        """Should not generate signals when markets are fairly priced."""
+    def test_forecast_strategy_picks_best_bucket(self):
+        """Should BUY_YES on the most probable bucket and BUY_NO only on certain losers."""
         settings = Settings()
-        settings.min_edge_threshold = 0.08
+        settings.max_position_pct = 0.10
         portfolio = PortfolioState(bankroll=1000.0, peak_bankroll=1000.0)
 
-        # Provide a full set of buckets so probabilities distribute properly
-        # With mean=59 and spread=3, approximate model probs:
-        # ≤55 ~15%, 56-57 ~18%, 58-59 ~36%, 60-61 ~22%, ≥62 ~9%
-        # Set market prices close to these so edge < 8%
+        # Mean=59, spread=3 → 58-59 bucket is most probable (~36%)
         import numpy as np
         np.random.seed(42)
         members = list(np.random.normal(59, 3, 31))
@@ -106,7 +103,6 @@ class TestDetectSignals:
             self._make_outcome("nyc", date(2026, 3, 20), "60-61", 59.5, 61.5, 0.22),
             self._make_outcome("nyc", date(2026, 3, 20), "≥62", 61.5, float("inf"), 0.13),
         ]
-        # Set tail bucket flags
         outcomes[0].bucket.is_lower_tail = True
         outcomes[4].bucket.is_upper_tail = True
 
@@ -123,6 +119,13 @@ class TestDetectSignals:
         }
 
         signals = detect_signals(outcomes, forecasts, settings, portfolio)
-        # With model probs distributed across 5 buckets and market prices
-        # set close to model estimates, edge should be < 8% threshold
-        assert len(signals) == 0, f"Expected no signals but got: {[(s.outcome.bucket.label, s.edge) for s in signals]}"
+        # Best bucket (58-59) should be BUY_YES
+        yes_signals = [s for s in signals if s.side == "BUY_YES"]
+        assert len(yes_signals) == 1
+        assert yes_signals[0].outcome.bucket.label == "58-59"
+        # NO signals only allowed if NO token is 75-95c — with these prices
+        # (NO prices = 1 - YES price), none qualify for certainty mode
+        no_signals = [s for s in signals if s.side == "BUY_NO"]
+        for s in no_signals:
+            assert 0.75 <= s.outcome.current_price_no <= 0.95, \
+                f"BUY_NO should only happen at 75-95c NO price, got {s.outcome.current_price_no}"

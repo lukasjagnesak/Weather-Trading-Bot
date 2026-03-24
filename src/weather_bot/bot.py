@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 
 from .config import Settings
 from .evaluation import (
+    get_existing_trade_keys,
     get_performance_metrics,
     record_trade,
     resolve_pending_trades,
@@ -81,6 +82,22 @@ async def run_scan(
         return []
 
     logger.info("Found %d raw signals", len(signals))
+
+    # Step 4b: Filter out signals for markets we already bet on
+    existing_keys = get_existing_trade_keys()
+    before_dedup = len(signals)
+    signals = [
+        s for s in signals
+        if (s.outcome.city, s.outcome.target_date.isoformat(),
+            s.outcome.bucket.label, s.side) not in existing_keys
+    ]
+    if before_dedup != len(signals):
+        logger.info("Filtered %d duplicate signals (already have pending trades)",
+                     before_dedup - len(signals))
+
+    if not signals:
+        logger.info("No new signals after deduplication")
+        return []
 
     # Step 5: Apply risk controls
     signals = apply_risk_controls(signals, portfolio, settings)

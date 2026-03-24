@@ -65,12 +65,12 @@ def detect_signals(
 ) -> list[Signal]:
     """Scan all market outcomes and generate trading signals.
 
-    When verified forecast is available:
-    - Correct bucket → BUY_YES
-    - Every other bucket → BUY_NO
-    - No minimum edge for verified picks (the verification IS the edge)
+    Forecast-first strategy:
+    1. Determine the most probable temperature bucket per city/date
+    2. BUY_YES on that bucket (only if YES token is cheap = high upside)
+    3. BUY_NO on buckets that are clearly wrong (only if NO token is 75-95c = high certainty)
 
-    Without verification: classic edge-based approach with min_edge_threshold.
+    This is NOT a lottery — we only bet on what the forecast says is most likely.
     """
     signals: list[Signal] = []
 
@@ -97,181 +97,102 @@ def detect_signals(
         has_verification = vf is not None and vf.source_count >= 2
 
         if has_verification:
-            verification_agreement = vf.agreement_score
-            # Blend ensemble confidence with verification agreement
             if vf.source_count >= 3:
-                confidence = 0.5 * confidence + 0.5 * verification_agreement
+                confidence = 0.5 * confidence + 0.5 * vf.agreement_score
             logger.info(
                 "Verified forecast for %s/%s: %.1f° (%d sources, spread=%.1f, agreement=%.0f%%)",
                 city, target_date, vf.mean_high, vf.source_count,
                 vf.spread, vf.agreement_score * 100,
             )
 
+        # ── Find the BEST bucket (highest model probability) ──────────
+        best_outcome = None
+        best_prob = 0.0
         for outcome in city_outcomes:
-            model_prob = model_probs.get(outcome.bucket.label, 0.0)
-            market_prob = outcome.current_price_yes
+            p = model_probs.get(outcome.bucket.label, 0.0)
+            if p > best_prob:
+                best_prob = p
+                best_outcome = outcome
 
-            # ─── VERIFIED MODE: bet on every bucket ─────────────────────
-            if has_verification:
-                signal = _verified_signal(
-                    outcome, model_prob, market_prob, vf, confidence,
-                    settings, portfolio, city, target_date,
-                )
-                if signal:
-                    signals.append(signal)
-                continue
-
-            # ─── EDGE MODE: traditional mispricing (no verification) ────
-            # Skip markets with no price discovery
-            if outcome.current_price_yes == 0.5 and outcome.current_price_no == 0.5:
-                continue
-            if outcome.volume < 100:
-                continue
-
-            signal = _edge_signal(
-                outcome, model_prob, market_prob, confidence,
-                settings, portfolio, city, target_date,
+        if best_outcome and best_prob > 0.20:
+            # BUY_YES on the most probable bucket — the core bet
+            signal = _forecast_signal(
+                best_outcome, best_prob, best_outcome.current_price_yes,
+                "BUY_YES", confidence, settings, portfolio, city, target_date,
+                vf=vf,
             )
             if signal:
                 signals.append(signal)
 
-    # Sort by edge (highest first)
-    signals.sort(key=lambda s: s.edge, reverse=True)
+        # ── BUY_NO on clearly wrong buckets (certainty mode: 75-95c) ──
+        for outcome in city_outcomes:
+            if outcome is best_outcome:
+                continue  # skip the best bucket — we bet YES on it
+            model_prob = model_probs.get(outcome.bucket.label, 0.0)
+            no_price = outcome.current_price_no
+
+            # Only bet NO when we're very confident this bucket is wrong
+            # NO token at 75-95c means market already thinks ~75-95% NO
+            # We agree, but the forecast says it's even more certain
+            if not (0.75 <= no_price <= 0.95):
+                continue
+            our_no_prob = 1.0 - model_prob
+            if our_no_prob < 0.85:
+                continue  # need ≥85% model confidence it's wrong
+
+            signal = _forecast_signal(
+                outcome, model_prob, no_price,
+                "BUY_NO", confidence, settings, portfolio, city, target_date,
+                vf=vf,
+            )
+            if signal:
+                signals.append(signal)
+
+    # Sort: YES bets first (core picks), then NO by edge
+    signals.sort(key=lambda s: (0 if s.side == "BUY_YES" else 1, -s.edge))
     return signals
 
 
-def _verified_signal(
+def _forecast_signal(
     outcome: MarketOutcome,
     model_prob: float,
-    market_prob: float,
-    vf: VerifiedForecast,
+    token_price: float,
+    side: str,
     confidence: float,
     settings: Settings,
     portfolio: PortfolioState,
     city: str,
     target_date: date,
+    vf: "VerifiedForecast | None" = None,
 ) -> Signal | None:
-    """Generate signal using Gaussian probability from verified forecast.
+    """Generate a signal based on forecast probability.
 
-    Instead of binary in/out-of-bucket, compute the probability that the
-    actual temperature falls in each bucket using a Gaussian distribution
-    centered on the verified mean with sigma = forecast spread.
-
-    Example: verified=15.2°C, spread=0.8°C
-      → P(15°C bucket) ≈ 45%, P(14°C) ≈ 20%, P(16°C) ≈ 28%
-      → BUY_YES on 15°C if market < 45%, BUY_YES on 14°C if market < 20%
-      → BUY_NO on 13°C if NO price < our P(NOT 13°C) ≈ 97%
-
-    Rules:
-    - Max price 95c (minimum 5% profit on $1 payout)
-    - BUY_YES when verified_prob > market price (bucket likely to win)
-    - BUY_NO when verified_prob_no > NO price (bucket likely to lose)
+    For BUY_YES: we buy the YES token → profit if bucket wins
+    For BUY_NO: we buy the NO token at 75-95c → profit if bucket loses
     """
-    MAX_PRICE = 0.95  # never pay more than 95c → min 5% profit
+    MAX_PRICE = 0.95  # never pay more than 95c
 
-    verified_temp = vf.mean_high
-    bucket = outcome.bucket
+    if side == "BUY_YES":
+        true_prob = model_prob
+        effective_price = token_price
+        # Use Gaussian probability from verification if available
+        if vf is not None:
+            sigma = max(vf.spread, 0.5)
+            true_prob = _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
+        edge = true_prob - effective_price
+    else:  # BUY_NO
+        true_prob = 1.0 - model_prob
+        effective_price = token_price
+        if vf is not None:
+            sigma = max(vf.spread, 0.5)
+            true_prob = 1.0 - _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
+        edge = true_prob - effective_price
 
-    # Compute probability of this bucket using Gaussian on verified temp
-    # Sigma = forecast spread, minimum 0.5° to avoid overconfidence
-    sigma = max(vf.spread, 0.5)
-    bucket_prob = _gaussian_bucket_prob(verified_temp, sigma, bucket)
-
-    # Decide: BUY_YES or BUY_NO?
-    prob_no = 1.0 - bucket_prob
-    edge_yes = bucket_prob - market_prob
-    edge_no = prob_no - outcome.current_price_no
-
-    MIN_PRICE = 0.02   # don't buy tokens under 2¢ (illiquid, negligible profit)
-
-    if edge_yes > edge_no and edge_yes > 0 and MIN_PRICE < market_prob < MAX_PRICE:
-        # ─── BUY_YES: we think this bucket is more likely than market ──
-        side = "BUY_YES"
-        effective_price = market_prob
-        edge = edge_yes
-        true_prob = bucket_prob
-        tag = "VERIFIED-YES"
-
-    elif edge_no > 0 and MIN_PRICE < outcome.current_price_no < MAX_PRICE:
-        # ─── BUY_NO: we think this bucket is less likely than market ───
-        side = "BUY_NO"
-        effective_price = outcome.current_price_no
-        edge = edge_no
-        true_prob = prob_no
-        tag = "VERIFIED-NO"
-
-    else:
-        # No profitable trade on either side
+    if edge <= 0 or effective_price >= MAX_PRICE or effective_price <= 0.01:
         return None
 
     # Kelly sizing
     kelly_f = _kelly_fraction(true_prob, effective_price)
-    if kelly_f <= 0:
-        return None
-
-    adjusted_kelly = kelly_f * settings.kelly_fraction * confidence
-
-    position_size = adjusted_kelly * portfolio.bankroll
-    max_pct = min(settings.max_position_pct * 2, 0.10)
-    position_size = min(position_size, max_pct * portfolio.bankroll)
-
-    if position_size < 1.0:
-        return None
-
-    signal = Signal(
-        outcome=outcome,
-        model_probability=model_prob,
-        market_probability=market_prob,
-        edge=edge,
-        side=side,
-        kelly_fraction=adjusted_kelly,
-        position_size_usd=round(position_size, 2),
-        confidence=confidence,
-    )
-
-    logger.info(
-        "[%s] %s %s | %s %s | verified=%.1f° σ=%.1f bucket_prob=%.0f%% "
-        "price=%.0fc edge=%.1f%% $%.2f",
-        tag, side, outcome.bucket.label, city, target_date,
-        verified_temp, sigma, bucket_prob * 100,
-        effective_price * 100, edge * 100, position_size,
-    )
-
-    return signal
-
-
-def _edge_signal(
-    outcome: MarketOutcome,
-    model_prob: float,
-    market_prob: float,
-    confidence: float,
-    settings: Settings,
-    portfolio: PortfolioState,
-    city: str,
-    target_date: date,
-) -> Signal | None:
-    """Generate signal based on ensemble edge only (no verification data)."""
-    edge_yes = model_prob - market_prob
-    edge_no = (1.0 - model_prob) - outcome.current_price_no
-
-    if edge_yes >= edge_no and edge_yes > 0:
-        edge = edge_yes
-        side = "BUY_YES"
-        effective_price = market_prob
-    elif edge_no > 0:
-        edge = edge_no
-        side = "BUY_NO"
-        effective_price = outcome.current_price_no
-    else:
-        return None
-
-    if edge < settings.min_edge_threshold:
-        return None
-
-    kelly_f = _kelly_fraction(
-        model_prob if side == "BUY_YES" else 1.0 - model_prob,
-        effective_price,
-    )
     if kelly_f <= 0:
         return None
 
@@ -283,10 +204,18 @@ def _edge_signal(
     if position_size < 1.0:
         return None
 
-    signal = Signal(
+    tag = "FORECAST-YES" if side == "BUY_YES" else "CERTAINTY-NO"
+
+    logger.info(
+        "[%s] %s %s | %s %s | prob=%.0f%% price=%.0fc edge=%.1f%% $%.2f",
+        tag, side, outcome.bucket.label, city, target_date,
+        true_prob * 100, effective_price * 100, edge * 100, position_size,
+    )
+
+    return Signal(
         outcome=outcome,
         model_probability=model_prob,
-        market_probability=market_prob,
+        market_probability=outcome.current_price_yes,
         edge=edge,
         side=side,
         kelly_fraction=adjusted_kelly,
@@ -294,13 +223,6 @@ def _edge_signal(
         confidence=confidence,
     )
 
-    logger.info(
-        "[EDGE] %s %s | %s %s | model=%.0f%% market=%.0f%% edge=%.1f%% $%.2f",
-        side, outcome.bucket.label, city, target_date,
-        model_prob * 100, market_prob * 100, edge * 100, position_size,
-    )
-
-    return signal
 
 
 def _gaussian_bucket_prob(mean: float, sigma: float, bucket) -> float:

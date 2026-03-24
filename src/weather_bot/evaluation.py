@@ -372,6 +372,21 @@ async def resolve_pending_trades(db_path: Path | None = None) -> list[dict]:
         conn.close()
 
 
+def get_existing_trade_keys(db_path: Path | None = None) -> set[tuple[str, str, str, str]]:
+    """Return set of (city, target_date, bucket_label, side) for all pending trades.
+
+    Used to prevent duplicate bets on the same market outcome after restart.
+    """
+    conn = _get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT city, target_date, bucket_label, side FROM trades WHERE resolved = 0",
+        ).fetchall()
+        return {(r["city"], r["target_date"], r["bucket_label"], r["side"]) for r in rows}
+    finally:
+        conn.close()
+
+
 def get_trades(
     city: str | None = None,
     target_date: str | None = None,
