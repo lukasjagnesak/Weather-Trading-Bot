@@ -722,5 +722,115 @@ def copy_disable(address: str):
         click.echo(f"  Wallet not found", err=True)
 
 
+@main.command(name="set-wallet")
+@click.argument("private_key")
+def set_wallet(private_key: str):
+    """Set a new wallet for live trading.
+
+    Validates the key, derives the address, updates .env,
+    and verifies CLOB connectivity.
+
+    Usage:  weather-bot set-wallet <PRIVATE_KEY_HEX>
+    """
+    import re
+    from pathlib import Path
+
+    # Strip 0x prefix if present
+    key = private_key.strip()
+    if key.startswith("0x"):
+        key = key[2:]
+
+    # Validate hex format
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", key):
+        click.echo("  Invalid private key — must be 64 hex characters")
+        raise SystemExit(1)
+
+    # Derive address
+    try:
+        from eth_account import Account
+        acct = Account.from_key(key)
+        address = acct.address
+    except Exception as e:
+        click.echo(f"  Cannot derive address: {e}")
+        click.echo("  Install eth-account: pip install eth-account")
+        raise SystemExit(1)
+
+    click.echo(f"\n  Wallet Setup")
+    click.echo(f"  {'=' * 40}")
+    click.echo(f"  Address: {address}")
+
+    # Test CLOB connectivity
+    try:
+        from py_clob_client.client import ClobClient
+        client = ClobClient(
+            "https://clob.polymarket.com",
+            key=key,
+            chain_id=137,
+            signature_type=0,
+            funder=address,
+        )
+        creds = client.create_or_derive_api_creds()
+        client.set_api_creds(creds)
+        click.echo(f"  CLOB authenticated — API key {creds.api_key[:12]}...")
+    except Exception as e:
+        click.echo(f"  CLOB auth failed: {e}")
+        click.echo("  (Wallet will be saved but may need Polymarket account setup)")
+
+    # Check collateral balance
+    try:
+        from py_clob_client.clob_types import BalanceAllowanceParams
+        params = BalanceAllowanceParams(asset_type="COLLATERAL")
+        bal = client.get_balance_allowance(params)
+        balance = int(bal.get("balance", "0")) / 1_000_000
+        click.echo(f"  CLOB collateral balance: ${balance:.2f}")
+        if balance == 0:
+            click.echo("  Balance is $0 — deposit USDC on Polymarket first!")
+    except Exception:
+        pass
+
+    # Update .env file
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        click.echo(f"  .env not found at {env_path}")
+        raise SystemExit(1)
+
+    env_text = env_path.read_text()
+
+    # Replace or add POLYMARKET_PRIVATE_KEY
+    if "POLYMARKET_PRIVATE_KEY=" in env_text:
+        env_text = re.sub(
+            r"POLYMARKET_PRIVATE_KEY=.*",
+            f"POLYMARKET_PRIVATE_KEY={key}",
+            env_text,
+        )
+    else:
+        env_text += f"\nPOLYMARKET_PRIVATE_KEY={key}\n"
+
+    # Replace or add POLYMARKET_FUNDER_ADDRESS
+    if "POLYMARKET_FUNDER_ADDRESS=" in env_text:
+        env_text = re.sub(
+            r"POLYMARKET_FUNDER_ADDRESS=.*",
+            f"POLYMARKET_FUNDER_ADDRESS={address}",
+            env_text,
+        )
+    else:
+        env_text += f"POLYMARKET_FUNDER_ADDRESS={address}\n"
+
+    env_path.write_text(env_text)
+
+    # Set restrictive permissions
+    try:
+        env_path.chmod(0o600)
+    except OSError:
+        pass
+
+    click.echo(f"\n  Wallet saved to .env (chmod 600)")
+    click.echo(f"  Next steps:")
+    click.echo(f"    1. Deposit USDC to your Polymarket account")
+    click.echo(f"    2. Run: weather-bot preflight")
+    click.echo(f"    3. Run: weather-bot run --mode live")
+    click.echo("")
+
+
 if __name__ == "__main__":
     main()
