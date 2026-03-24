@@ -724,13 +724,17 @@ def copy_disable(address: str):
 
 @main.command(name="set-wallet")
 @click.argument("private_key")
-def set_wallet(private_key: str):
+@click.option("--funder", default=None,
+              help="Polymarket proxy/funder address (if different from signing key)")
+def set_wallet(private_key: str, funder: str | None):
     """Set a new wallet for live trading.
 
     Validates the key, derives the address, updates .env,
     and verifies CLOB connectivity.
 
-    Usage:  weather-bot set-wallet <PRIVATE_KEY_HEX>
+    Usage:
+      weather-bot set-wallet <PRIVATE_KEY_HEX>
+      weather-bot set-wallet <KEY> --funder 0xYourPolymarketProxy
     """
     import re
     from pathlib import Path
@@ -755,9 +759,15 @@ def set_wallet(private_key: str):
         click.echo("  Install eth-account: pip install eth-account")
         raise SystemExit(1)
 
+    # Determine funder address (Polymarket proxy wallet)
+    funder_address = funder if funder else address
+
     click.echo(f"\n  Wallet Setup")
     click.echo(f"  {'=' * 40}")
-    click.echo(f"  Address: {address}")
+    click.echo(f"  Signing key:    {address}")
+    click.echo(f"  Funder address: {funder_address}")
+    if funder:
+        click.echo(f"  (Using separate Polymarket proxy wallet)")
 
     # Test CLOB connectivity
     try:
@@ -767,7 +777,7 @@ def set_wallet(private_key: str):
             key=key,
             chain_id=137,
             signature_type=0,
-            funder=address,
+            funder=funder_address,
         )
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
@@ -810,11 +820,11 @@ def set_wallet(private_key: str):
     if "POLYMARKET_FUNDER_ADDRESS=" in env_text:
         env_text = re.sub(
             r"POLYMARKET_FUNDER_ADDRESS=.*",
-            f"POLYMARKET_FUNDER_ADDRESS={address}",
+            f"POLYMARKET_FUNDER_ADDRESS={funder_address}",
             env_text,
         )
     else:
-        env_text += f"POLYMARKET_FUNDER_ADDRESS={address}\n"
+        env_text += f"POLYMARKET_FUNDER_ADDRESS={funder_address}\n"
 
     env_path.write_text(env_text)
 
