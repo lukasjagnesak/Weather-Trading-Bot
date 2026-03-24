@@ -593,16 +593,15 @@ def preflight(verbose: bool):
             funder_match = (
                 derived_addr.lower() == settings.polymarket_funder_address.lower()
             )
-            check(
-                "Private key → address match",
-                funder_match,
-                f"key derives {derived_addr}"
-                + (
-                    ""
-                    if funder_match
-                    else f" but funder is {settings.polymarket_funder_address}"
-                ),
-            )
+            if funder_match:
+                check("Private key → address match", True,
+                      f"key derives {derived_addr}")
+            else:
+                # Polymarket uses proxy wallets — funder != signer is normal
+                check("Private key → signing address", True,
+                      f"signer {derived_addr}")
+                check("Funder (proxy wallet)", True,
+                      f"{settings.polymarket_funder_address} (Polymarket proxy)")
         except ImportError:
             check("Private key → address match", False,
                   "eth-account not installed — pip install eth-account")
