@@ -715,7 +715,7 @@ def balance():
             settings.polymarket_clob_url,
             key=settings.polymarket_private_key,
             chain_id=137,
-            signature_type=0,
+            signature_type=settings.polymarket_signature_type,
             funder=settings.polymarket_funder_address,
         )
         creds = client.create_or_derive_api_creds()
@@ -801,10 +801,14 @@ def set_wallet(private_key: str, funder: str | None):
     # Determine funder address (Polymarket proxy wallet)
     funder_address = funder if funder else address
 
+    # Auto-detect signature type: proxy wallet (type 2) when funder differs
+    sig_type = 2 if (funder and funder.lower() != address.lower()) else 0
+
     click.echo(f"\n  Wallet Setup")
     click.echo(f"  {'=' * 40}")
     click.echo(f"  Signing key:    {address}")
     click.echo(f"  Funder address: {funder_address}")
+    click.echo(f"  Signature type: {sig_type} ({'POLY_PROXY' if sig_type == 2 else 'EOA'})")
     if funder:
         click.echo(f"  (Using separate Polymarket proxy wallet)")
 
@@ -815,7 +819,7 @@ def set_wallet(private_key: str, funder: str | None):
             "https://clob.polymarket.com",
             key=key,
             chain_id=137,
-            signature_type=0,
+            signature_type=sig_type,
             funder=funder_address,
         )
         creds = client.create_or_derive_api_creds()
@@ -864,6 +868,16 @@ def set_wallet(private_key: str, funder: str | None):
         )
     else:
         env_text += f"POLYMARKET_FUNDER_ADDRESS={funder_address}\n"
+
+    # Replace or add POLYMARKET_SIGNATURE_TYPE
+    if "POLYMARKET_SIGNATURE_TYPE=" in env_text:
+        env_text = re.sub(
+            r"POLYMARKET_SIGNATURE_TYPE=.*",
+            f"POLYMARKET_SIGNATURE_TYPE={sig_type}",
+            env_text,
+        )
+    else:
+        env_text += f"POLYMARKET_SIGNATURE_TYPE={sig_type}\n"
 
     env_path.write_text(env_text)
 
