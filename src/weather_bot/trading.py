@@ -68,9 +68,9 @@ def detect_signals(
     Forecast-first strategy:
     1. Determine the most probable temperature bucket per city/date
     2. BUY_YES on that bucket (only if YES token is cheap = high upside)
-    3. BUY_NO on buckets that are clearly wrong (only if NO token is 75-95c = high certainty)
+    3. BUY_NO on buckets the forecast says are wrong (NO price 50-95c, model ≥70% NO)
 
-    This is NOT a lottery — we only bet on what the forecast says is most likely.
+    Both YES and NO bets are driven by the verified multi-source forecast.
     """
     signals: list[Signal] = []
 
@@ -124,21 +124,21 @@ def detect_signals(
             if signal:
                 signals.append(signal)
 
-        # ── BUY_NO on clearly wrong buckets (certainty mode: 75-95c) ──
+        # ── BUY_NO on buckets the forecast says are wrong ──────────
         for outcome in city_outcomes:
             if outcome is best_outcome:
                 continue  # skip the best bucket — we bet YES on it
             model_prob = model_probs.get(outcome.bucket.label, 0.0)
             no_price = outcome.current_price_no
 
-            # Only bet NO when we're very confident this bucket is wrong
-            # NO token at 75-95c means market already thinks ~75-95% NO
-            # We agree, but the forecast says it's even more certain
-            if not (0.75 <= no_price <= 0.95):
+            # Bet NO when forecast clearly disagrees with market.
+            # NO price range 50-95c (market thinks 50-95% NO, we think more)
+            # Model must give ≤30% YES probability (i.e. ≥70% NO)
+            if not (0.50 <= no_price <= 0.95):
                 continue
             our_no_prob = 1.0 - model_prob
-            if our_no_prob < 0.85:
-                continue  # need ≥85% model confidence it's wrong
+            if our_no_prob < 0.70:
+                continue  # need ≥70% model confidence it's wrong
 
             signal = _forecast_signal(
                 outcome, model_prob, no_price,
@@ -168,7 +168,7 @@ def _forecast_signal(
     """Generate a signal based on forecast probability.
 
     For BUY_YES: we buy the YES token → profit if bucket wins
-    For BUY_NO: we buy the NO token at 75-95c → profit if bucket loses
+    For BUY_NO: we buy the NO token → profit if bucket loses
     """
     MAX_PRICE = 0.95  # never pay more than 95c
 

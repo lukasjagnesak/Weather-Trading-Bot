@@ -33,7 +33,7 @@ async def run_scan(
     Returns a list of trade result dicts for reporting.
     """
     today = date.today()
-    target_dates = [today + timedelta(days=i) for i in range(3)]
+    target_dates = [today + timedelta(days=i) for i in range(2)]
 
     # Step 1: Fetch active temperature markets from Polymarket
     logger.info("Fetching active temperature markets...")
