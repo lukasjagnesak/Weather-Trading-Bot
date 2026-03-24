@@ -74,7 +74,7 @@ async def _fetch_model_batch(
     city_key: str,
     target_dates: list[date],
     model: str,
-    max_retries: int = 3,
+    max_retries: int = 4,
 ) -> dict[date, EnsembleForecast]:
     """Fetch a single model forecast for multiple dates in one request."""
     temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
@@ -94,14 +94,14 @@ async def _fetch_model_batch(
     data = None
     for attempt in range(max_retries):
         try:
-            await asyncio.sleep(1.5)  # rate-limit for Open-Meteo free tier
+            await asyncio.sleep(5.0)  # rate-limit: ensemble API free tier is strict
             resp = await client.get(ENSEMBLE_API_URL, params=params)
             resp.raise_for_status()
             data = resp.json()
             break
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429 and attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
+                wait = 10 * (attempt + 1)  # 10s, 20s, 30s
                 logger.warning("Rate limited on %s/%s, retrying in %ds...", model, city_key, wait)
                 await asyncio.sleep(wait)
                 continue
