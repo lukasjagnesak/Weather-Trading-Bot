@@ -92,7 +92,7 @@ def detect_signals(
         # Log ensemble forecast details per model so we can verify correctness
         for fc in forecast_list:
             logger.info(
-                "FORECAST %s %s/%s: model=%s members=%d mean=%.1f std=%.1f min=%.1f max=%.1f",
+                "FORECAST %s %s/%s: model=%s members=%d predicted_daily_high=%.1f spread=%.1f range=[%.1f..%.1f]",
                 fc.unit, city, target_date, fc.model_name,
                 len(fc.members), np.mean(fc.members), np.std(fc.members),
                 np.min(fc.members), np.max(fc.members),
