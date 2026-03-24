@@ -201,8 +201,10 @@ def _forecast_signal(
     max_position = settings.max_position_pct * portfolio.bankroll
     position_size = min(position_size, max_position)
 
-    # Polymarket minimum is 5 shares; at max price 95c that's $4.75
-    min_usd = max(5.0 * effective_price, 1.0)
+    # Polymarket minimum is 5 shares; use best_ask (actual execution price)
+    # for YES trades since that's what execute_signal pays
+    exec_price = outcome.best_ask if side == "BUY_YES" else outcome.current_price_no
+    min_usd = max(5.0 * exec_price, 1.0)
     if position_size < min_usd:
         return None
 
