@@ -550,14 +550,14 @@ def preflight(verbose: bool):
     settings = Settings()
     all_ok = True
 
-    def check(name: str, ok: bool, detail: str = ""):
+    def check(name: str, ok: bool, detail: str = "", optional: bool = False):
         nonlocal all_ok
         status = "\u2705" if ok else "\u274c"
         msg = f"  {status} {name}"
         if detail:
             msg += f" — {detail}"
         click.echo(msg)
-        if not ok:
+        if not ok and not optional:
             all_ok = False
 
     click.echo("\n  PRE-FLIGHT CHECKS\n  " + "=" * 40 + "\n")
@@ -663,7 +663,8 @@ def preflight(verbose: bool):
     has_telegram = bool(settings.telegram_bot_token and settings.telegram_chat_id)
     check("Telegram configured", has_telegram,
           "alerts + daily report" if has_telegram
-          else "optional — set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID")
+          else "optional — set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID",
+          optional=True)
 
     # 7. Risk parameters
     click.echo("")
