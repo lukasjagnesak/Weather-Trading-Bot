@@ -79,7 +79,7 @@ async def _fetch_single_model(
     }
 
     try:
-        await asyncio.sleep(0.5)  # rate-limit: max 2 req/s for Open-Meteo free tier
+        await asyncio.sleep(1.0)  # rate-limit: max 2 req/s for Open-Meteo free tier
         resp = await client.get(ENSEMBLE_API_URL, params=params)
         resp.raise_for_status()
         data = resp.json()

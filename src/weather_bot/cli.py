@@ -576,13 +576,57 @@ def preflight(verbose: bool):
           settings.polymarket_funder_address[:10] + "..." if has_funder
           else "MISSING — set POLYMARKET_FUNDER_ADDRESS in .env")
 
-    # 3. py-clob-client
+    # 3. py-clob-client + wallet verification
     try:
         import py_clob_client  # noqa: F401
         check("py-clob-client installed", True)
     except ImportError:
         check("py-clob-client installed", False,
               "pip install py-clob-client")
+
+    # 3b. Verify private key matches funder address
+    if has_key:
+        try:
+            from eth_account import Account
+            acct = Account.from_key(settings.polymarket_private_key)
+            derived_addr = acct.address
+            funder_match = (
+                derived_addr.lower() == settings.polymarket_funder_address.lower()
+            )
+            check(
+                "Private key → address match",
+                funder_match,
+                f"key derives {derived_addr}"
+                + (
+                    ""
+                    if funder_match
+                    else f" but funder is {settings.polymarket_funder_address}"
+                ),
+            )
+        except ImportError:
+            check("Private key → address match", False,
+                  "eth-account not installed — pip install eth-account")
+        except Exception as e:
+            check("Private key → address match", False, str(e))
+
+    # 3c. Verify CLOB client connectivity and API creds
+    if has_key and has_funder:
+        try:
+            from py_clob_client.client import ClobClient
+
+            clob = ClobClient(
+                settings.polymarket_clob_url,
+                key=settings.polymarket_private_key,
+                chain_id=137,
+                signature_type=settings.polymarket_signature_type,
+                funder=settings.polymarket_funder_address,
+            )
+            api_creds = clob.create_or_derive_api_creds()
+            clob.set_api_creds(api_creds)
+            check("CLOB API creds derived", True,
+                  f"API key {api_creds.api_key[:12]}...")
+        except Exception as e:
+            check("CLOB API creds derived", False, str(e))
 
     # 4. Polymarket API access
     async def _check_api():
