@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     copy_trade_scale: float = 0.5  # scale factor for copied positions (0-1)
 
     # Scan interval in seconds
-    scan_interval: int = 300  # 5 minutes
+    scan_interval: int = 1800  # 30 minutes — markets move slowly, forecasts update every 6-12h
 
     # Cities to trade (keys from CITIES dict)
     active_cities: list[str] = Field(

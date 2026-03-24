@@ -21,8 +21,8 @@ ENSEMBLE_API_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
 # Disk-based cache: survives restarts, ensemble models update every 6-12h
 _CACHE_DIR = Path.home() / ".weather_bot"
 _CACHE_FILE = _CACHE_DIR / "forecast_cache.json"
-CACHE_TTL_MINUTES = 30
-CACHE_STALE_TTL_MINUTES = 360  # 6 hours — fallback when rate-limited
+CACHE_TTL_MINUTES = 360  # 6 hours — ensemble models update every 6-12h
+CACHE_STALE_TTL_MINUTES = 720  # 12 hours — fallback when rate-limited
 
 
 def _save_cache(
@@ -180,14 +180,14 @@ async def _fetch_model_batch(
     data = None
     for attempt in range(max_retries):
         try:
-            await asyncio.sleep(5.0)  # rate-limit: ensemble API free tier is strict
+            await asyncio.sleep(1.0)  # brief courtesy delay
             resp = await client.get(ENSEMBLE_API_URL, params=params)
             resp.raise_for_status()
             data = resp.json()
             break
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429 and attempt < max_retries - 1:
-                wait = 10 * (attempt + 1)  # 10s, 20s, 30s
+                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s, 240s
                 logger.warning("Rate limited on %s/%s, retrying in %ds...", model, city_key, wait)
                 await asyncio.sleep(wait)
                 continue
@@ -282,7 +282,7 @@ async def _fetch_multi_city_model(
     data = None
     for attempt in range(max_retries):
         try:
-            await asyncio.sleep(5.0)  # rate-limit for ensemble API free tier
+            await asyncio.sleep(1.0)  # brief courtesy delay
             resp = await client.get(ENSEMBLE_API_URL, params=params)
             resp.raise_for_status()
             data = resp.json()

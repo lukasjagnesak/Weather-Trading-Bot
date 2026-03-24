@@ -18,6 +18,10 @@ from .config import CITIES
 
 logger = logging.getLogger(__name__)
 
+# In-memory verification cache (deterministic forecasts also update slowly)
+_verification_cache: dict[str, tuple[datetime, dict[tuple[str, date], "VerifiedForecast"]]] = {}
+_VERIFICATION_CACHE_TTL_MINUTES = 360  # 6 hours — same as ensemble cache
+
 
 @dataclass
 class ForecastSource:
@@ -292,6 +296,21 @@ async def verify_all_cities(
     target_dates: list[date],
 ) -> dict[tuple[str, date], VerifiedForecast]:
     """Fetch verified forecasts for multiple cities and dates."""
+    # Check in-memory cache
+    cache_key = (
+        ",".join(sorted(city_keys))
+        + "|" + ",".join(d.isoformat() for d in sorted(target_dates))
+    )
+    if cache_key in _verification_cache:
+        cached_time, cached_results = _verification_cache[cache_key]
+        age_minutes = (datetime.now() - cached_time).total_seconds() / 60
+        if age_minutes < _VERIFICATION_CACHE_TTL_MINUTES:
+            logger.info(
+                "Using cached verification forecasts (%.0f min old, TTL=%d min)",
+                age_minutes, _VERIFICATION_CACHE_TTL_MINUTES,
+            )
+            return cached_results
+
     results: dict[tuple[str, date], VerifiedForecast] = {}
 
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -300,6 +319,9 @@ async def verify_all_cities(
                 vf = await verify_forecast(city_key, target_date, client=client)
                 if vf.sources:
                     results[(city_key, target_date)] = vf
+
+    if results:
+        _verification_cache[cache_key] = (datetime.now(), results)
 
     logger.info("Verified forecasts for %d city-date combinations", len(results))
     return results
