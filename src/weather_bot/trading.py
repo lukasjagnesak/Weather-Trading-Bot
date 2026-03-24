@@ -201,7 +201,9 @@ def _forecast_signal(
     max_position = settings.max_position_pct * portfolio.bankroll
     position_size = min(position_size, max_position)
 
-    if position_size < 1.0:
+    # Polymarket minimum is 5 shares; at max price 95c that's $4.75
+    min_usd = max(5.0 * effective_price, 1.0)
+    if position_size < min_usd:
         return None
 
     tag = "FORECAST-YES" if side == "BUY_YES" else "CERTAINTY-NO"
@@ -337,10 +339,10 @@ async def execute_signal(
             signal.side, token_id[:40], price, signal.outcome.condition_id, signal.outcome.market_id,
         )
 
-        # Calculate number of shares
+        # Calculate number of shares (Polymarket minimum is 5 shares)
         size = signal.position_size_usd / price if price > 0 else 0
-        if size < 1:
-            logger.warning("Trade size too small: %.2f shares", size)
+        if size < 5:
+            logger.warning("Trade size too small: %.2f shares (Polymarket min=5)", size)
             return False
 
         # Polymarket uses tick sizes of 0.001; ensure price is valid

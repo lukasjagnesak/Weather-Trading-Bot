@@ -89,7 +89,7 @@ async def run_scan(
     signals = [
         s for s in signals
         if (s.outcome.city, s.outcome.target_date.isoformat(),
-            s.outcome.bucket.label, s.side) not in existing_keys
+            s.outcome.bucket.label) not in existing_keys
     ]
     if before_dedup != len(signals):
         logger.info("Filtered %d duplicate signals (already have pending trades)",
