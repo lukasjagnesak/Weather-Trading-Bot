@@ -170,7 +170,7 @@ class Settings(BaseSettings):
     certainty_enabled: bool = True
     certainty_min_model_prob: float = 0.70   # model must give ≥70% probability
     certainty_max_price: float = 0.95        # never pay more than 95c
-    certainty_position_pct: float = 0.30     # 30% of bankroll per certainty bet (high-confidence = larger size)
+    certainty_position_pct: float = 0.07     # 7% of bankroll per certainty bet (~$1.12 at $16 bankroll)
 
     # Ensemble models to use
     ensemble_models: list[str] = Field(

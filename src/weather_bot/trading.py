@@ -309,11 +309,10 @@ def _certainty_signal(
     # designed for uncertain edge bets, not high-confidence plays).
     position_size = settings.certainty_position_pct * portfolio.bankroll
 
-    exec_price = outcome.best_ask if side == "BUY_YES" else outcome.current_price_no
-    min_usd = max(5.0 * exec_price, 1.0)
-    if position_size < min_usd:
+    if position_size < 1.0:
         return None
 
+    exec_price = outcome.best_ask if side == "BUY_YES" else outcome.current_price_no
     edge = true_prob - effective_price  # may be 0 or slightly negative
     profit_margin = 1.0 - effective_price  # cents collected per share if correct
 
@@ -448,10 +447,10 @@ async def execute_signal(
             signal.side, token_id[:40], price, signal.outcome.condition_id, signal.outcome.market_id,
         )
 
-        # Calculate number of shares (Polymarket minimum is 5 shares)
+        # Calculate number of shares
         size = signal.position_size_usd / price if price > 0 else 0
-        if size < 5:
-            logger.warning("Trade size too small: %.2f shares (Polymarket min=5)", size)
+        if signal.position_size_usd < 1.0:
+            logger.warning("Trade size too small: $%.2f (Polymarket min=$1)", signal.position_size_usd)
             return False
 
         # Polymarket uses tick sizes of 0.001; ensure price is valid
