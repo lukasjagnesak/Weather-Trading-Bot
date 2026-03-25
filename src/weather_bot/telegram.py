@@ -130,8 +130,44 @@ def format_daily_report(
 
 def format_scan_summary(signals_count: int, markets_count: int, cities: list[str]) -> str:
     """Format a short scan completion notification."""
+    if signals_count > 0:
+        return (
+            f"\U0001f50d <b>Scan complete</b>\n"
+            f"\U0001f4b9 Signals: <b>{signals_count}</b>\n"
+            f"Cities: {', '.join(c.upper() for c in cities)}\n"
+            f"\u23f0 {datetime.utcnow().strftime('%H:%M UTC')}"
+        )
     return (
-        f"\U0001f50d <b>Scan complete</b>\n"
-        f"Markets: {markets_count} | Signals: {signals_count}\n"
-        f"Cities: {', '.join(c.upper() for c in cities)}"
+        f"\U0001f50d <b>Scan complete</b> — no signals\n"
+        f"Cities: {', '.join(c.upper() for c in cities)}\n"
+        f"\u23f0 {datetime.utcnow().strftime('%H:%M UTC')}"
     )
+
+
+def format_resolution_alert(resolved: list[dict], bankroll: float) -> str:
+    """Format resolved trade results for Telegram."""
+    total_pnl = sum(r.get("pnl", 0) for r in resolved)
+    wins = sum(1 for r in resolved if r.get("outcome") == "win")
+    losses = len(resolved) - wins
+    pnl_sign = "+" if total_pnl >= 0 else ""
+    emoji = "\U0001f3c6" if total_pnl >= 0 else "\U0001f4a5"
+
+    lines = [
+        f"{emoji} <b>Trades resolved: {len(resolved)}</b>",
+        f"\U0001f3af Results: {wins}W / {losses}L",
+        f"\U0001f4b0 P&L: <b>{pnl_sign}${total_pnl:.2f}</b>",
+        f"\U0001f4b3 Bankroll: <b>${bankroll:.2f}</b>",
+        "",
+    ]
+
+    for r in resolved:
+        result_emoji = "\u2705" if r.get("outcome") == "win" else "\u274c"
+        pnl = r.get("pnl", 0)
+        lines.append(
+            f"  {result_emoji} {r.get('city', '?').upper()} {r.get('bucket', '?')} "
+            f"actual={r.get('actual_temp', '?')}\u00b0 "
+            f"{'+' if pnl >= 0 else ''}${pnl:.2f}"
+        )
+
+    lines.append(f"\n\u23f0 {datetime.utcnow().strftime('%H:%M UTC')}")
+    return "\n".join(lines)

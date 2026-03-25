@@ -16,7 +16,7 @@ from .evaluation import (
 from .market import fetch_active_temperature_markets
 from .models import PortfolioState
 from .risk import apply_risk_controls
-from .telegram import format_daily_report, format_trade_alert, send_telegram
+from .telegram import format_daily_report, format_scan_summary, format_trade_alert, format_resolution_alert, send_telegram
 from .trading import detect_signals, execute_signal
 from .verification import fetch_current_observed_high, verify_all_cities
 from .weather import fetch_all_cities
@@ -204,13 +204,18 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
                 resolved = await resolve_pending_trades()
                 if resolved:
                     logger.info("Resolved %d pending trades", len(resolved))
-                    # Update portfolio P&L from resolved trades
                     for r in resolved:
                         portfolio.daily_pnl += r["pnl"]
                         portfolio.bankroll += r["pnl"]
                         portfolio.peak_bankroll = max(
                             portfolio.peak_bankroll, portfolio.bankroll
                         )
+                    # Send Telegram alert for each resolved trade
+                    try:
+                        msg = format_resolution_alert(resolved, portfolio.bankroll)
+                        await send_telegram(msg, settings)
+                    except Exception as e:
+                        logger.warning("Telegram resolution alert failed: %s", e)
             except Exception as e:
                 logger.warning("Failed to resolve pending trades: %s", e)
 
@@ -251,6 +256,18 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
                 all_trades_today.extend(results)
             else:
                 logger.info("Scan complete, no trades")
+
+            # Send scan summary to Telegram
+            if settings.telegram_trade_alerts:
+                try:
+                    scan_msg = format_scan_summary(
+                        signals_count=len(results),
+                        markets_count=0,  # filled by run_scan log
+                        cities=settings.active_cities,
+                    )
+                    await send_telegram(scan_msg, settings)
+                except Exception as e:
+                    logger.debug("Telegram scan summary failed: %s", e)
         except Exception as e:
             logger.error("Scan failed: %s", e, exc_info=True)
 
