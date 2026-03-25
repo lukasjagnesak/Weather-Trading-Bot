@@ -138,17 +138,21 @@ def detect_signals(
             )
             if signal:
                 signals.append(signal)
-            elif settings.certainty_enabled:
-                # Certainty strategy: even if there's no "edge" vs market price,
-                # buy YES when model is confident enough and price < max cap.
-                # Collects the remaining profit margin (e.g. buy at 70c → profit 30c).
+
+            # Certainty strategy runs independently (not as fallback)
+            if settings.certainty_enabled:
                 cert = _certainty_signal(
                     best_outcome, best_prob, best_outcome.current_price_yes,
                     "BUY_YES", confidence, settings, portfolio, city, target_date,
                     vf=vf, observed_highs=observed_highs,
                 )
                 if cert:
-                    signals.append(cert)
+                    # Avoid duplicate: only add if edge strategy didn't already pick this
+                    if not signal:
+                        signals.append(cert)
+                    else:
+                        logger.info("Certainty confirms edge signal for %s/%s %s",
+                                    city, target_date, best_outcome.bucket.label)
 
         # ── BUY_NO on buckets the forecast says are wrong ──────────
         for outcome in city_outcomes:
@@ -173,13 +177,14 @@ def detect_signals(
             )
             if signal:
                 signals.append(signal)
-            elif settings.certainty_enabled:
+
+            if settings.certainty_enabled:
                 cert = _certainty_signal(
                     outcome, model_prob, no_price,
                     "BUY_NO", confidence, settings, portfolio, city, target_date,
                     vf=vf, observed_highs=observed_highs,
                 )
-                if cert:
+                if cert and not signal:
                     signals.append(cert)
 
     # Sort: YES bets first (core picks), then NO by edge
