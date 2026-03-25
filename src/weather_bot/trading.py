@@ -305,9 +305,9 @@ def _certainty_signal(
         return None
 
     # Fixed position size for certainty bets (not Kelly — edge may be ≤ 0)
+    # Uses its own percentage, not capped by max_position_pct (which is
+    # designed for uncertain edge bets, not high-confidence plays).
     position_size = settings.certainty_position_pct * portfolio.bankroll
-    max_position = settings.max_position_pct * portfolio.bankroll
-    position_size = min(position_size, max_position)
 
     exec_price = outcome.best_ask if side == "BUY_YES" else outcome.current_price_no
     min_usd = max(5.0 * exec_price, 1.0)
