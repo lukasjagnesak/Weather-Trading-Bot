@@ -134,6 +134,17 @@ def detect_signals(
             )
             if signal:
                 signals.append(signal)
+            elif settings.certainty_enabled:
+                # Certainty strategy: even if there's no "edge" vs market price,
+                # buy YES when model is confident enough and price < max cap.
+                # Collects the remaining profit margin (e.g. buy at 70c → profit 30c).
+                cert = _certainty_signal(
+                    best_outcome, best_prob, best_outcome.current_price_yes,
+                    "BUY_YES", confidence, settings, portfolio, city, target_date,
+                    vf=vf,
+                )
+                if cert:
+                    signals.append(cert)
 
         # ── BUY_NO on buckets the forecast says are wrong ──────────
         for outcome in city_outcomes:
@@ -158,6 +169,14 @@ def detect_signals(
             )
             if signal:
                 signals.append(signal)
+            elif settings.certainty_enabled:
+                cert = _certainty_signal(
+                    outcome, model_prob, no_price,
+                    "BUY_NO", confidence, settings, portfolio, city, target_date,
+                    vf=vf,
+                )
+                if cert:
+                    signals.append(cert)
 
     # Sort: YES bets first (core picks), then NO by edge
     signals.sort(key=lambda s: (0 if s.side == "BUY_YES" else 1, -s.edge))
@@ -238,6 +257,83 @@ def _forecast_signal(
         confidence=confidence,
     )
 
+
+
+def _certainty_signal(
+    outcome: MarketOutcome,
+    model_prob: float,
+    token_price: float,
+    side: str,
+    confidence: float,
+    settings: Settings,
+    portfolio: PortfolioState,
+    city: str,
+    target_date: date,
+    vf: "VerifiedForecast | None" = None,
+) -> Signal | None:
+    """Generate a certainty-strategy signal.
+
+    Buys YES/NO when the model is highly confident even if the market is
+    already well-priced.  Collects the remaining profit margin up to 95c.
+
+    Example: model says 90% YES, market priced at 75c → buy YES at 75c,
+    collect 25c profit per share when it resolves correctly.
+    """
+    if not settings.certainty_enabled:
+        return None
+
+    # Determine the true probability (use verification if available)
+    if side == "BUY_YES":
+        if vf is not None:
+            sigma = max(vf.spread, 0.5)
+            true_prob = _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
+        else:
+            true_prob = model_prob
+        effective_price = token_price
+    else:  # BUY_NO
+        if vf is not None:
+            sigma = max(vf.spread, 0.5)
+            true_prob = 1.0 - _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
+        else:
+            true_prob = 1.0 - model_prob
+        effective_price = token_price
+
+    # Only trade if model is confident enough and price is below cap
+    if true_prob < settings.certainty_min_model_prob:
+        return None
+    if effective_price >= settings.certainty_max_price or effective_price <= 0.01:
+        return None
+
+    # Fixed position size for certainty bets (not Kelly — edge may be ≤ 0)
+    position_size = settings.certainty_position_pct * portfolio.bankroll
+    max_position = settings.max_position_pct * portfolio.bankroll
+    position_size = min(position_size, max_position)
+
+    exec_price = outcome.best_ask if side == "BUY_YES" else outcome.current_price_no
+    min_usd = max(5.0 * exec_price, 1.0)
+    if position_size < min_usd:
+        return None
+
+    edge = true_prob - effective_price  # may be 0 or slightly negative
+    profit_margin = 1.0 - effective_price  # cents collected per share if correct
+
+    tag = "CERTAINTY-YES" if side == "BUY_YES" else "CERTAINTY-NO"
+    logger.info(
+        "[%s] %s %s | %s %s | prob=%.0f%% price=%.0fc margin=%.0fc $%.2f",
+        tag, side, outcome.bucket.label, city, target_date,
+        true_prob * 100, effective_price * 100, profit_margin * 100, position_size,
+    )
+
+    return Signal(
+        outcome=outcome,
+        model_probability=model_prob,
+        market_probability=outcome.current_price_yes,
+        edge=edge,
+        side=side,
+        kelly_fraction=settings.certainty_position_pct,
+        position_size_usd=round(position_size, 2),
+        confidence=confidence,
+    )
 
 
 def _gaussian_bucket_prob(mean: float, sigma: float, bucket) -> float:

@@ -163,6 +163,15 @@ class Settings(BaseSettings):
     daily_loss_limit_pct: float = 0.03  # stop at 3% daily loss
     max_drawdown_pct: float = 0.15  # reduce size at 15% drawdown
 
+    # High-confidence "certainty" strategy
+    # Buy YES/NO even if market is already well-priced, as long as our model
+    # is confident enough and the price is below the maximum cap.
+    # e.g. model says 90% → buy YES at 70c, collect 30c profit per share.
+    certainty_enabled: bool = True
+    certainty_min_model_prob: float = 0.70   # model must give ≥70% probability
+    certainty_max_price: float = 0.95        # never pay more than 95c
+    certainty_position_pct: float = 0.01     # 1% of bankroll per certainty bet
+
     # Ensemble models to use
     ensemble_models: list[str] = Field(
         default=["gfs_seamless", "ecmwf_ifs025"]
