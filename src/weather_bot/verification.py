@@ -333,13 +333,126 @@ async def verify_all_cities(
     return results
 
 
+async def _fetch_wunderground_high(
+    city_key: str,
+    target_date: date,
+    client: httpx.AsyncClient,
+) -> float | None:
+    """Scrape the daily high temperature from Weather Underground.
+
+    This is the **actual resolution source** for Polymarket temperature
+    markets, so it should always be preferred over model-reanalysis data
+    (Open-Meteo archive) when available.
+    """
+    import re
+
+    city = CITIES.get(city_key)
+    if not city or not city.wunderground_url:
+        return None
+
+    url = f"{city.wunderground_url}/date/{target_date.isoformat()}"
+    try:
+        resp = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; WeatherBot/1.0)"},
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        html = resp.text
+    except (httpx.HTTPError, ValueError) as e:
+        logger.debug("WU fetch failed for %s/%s: %s", city_key, target_date, e)
+        return None
+
+    # WU embeds daily summary data in a JSON blob inside a <script> tag.
+    # Look for the "observations" or summary table with Max temperature.
+    # The page renders temps in both °F and °C; we extract based on city unit.
+
+    # Strategy 1: Parse the lib-state JSON that WU injects into the page.
+    # It typically contains a "observations" key with "tempHigh" or similar.
+    json_match = re.search(
+        r'"temperature":\s*\{[^}]*"max":\s*(-?\d+(?:\.\d+)?)', html
+    )
+    if json_match:
+        temp_c = float(json_match.group(1))
+        if city.unit == "fahrenheit":
+            return round(temp_c * 9 / 5 + 32, 1)
+        return temp_c
+
+    # Strategy 2: Look for the "Max" row in the summary table.
+    # WU shows "Max Temperature" with the value in a <span> with class
+    # "wu-value wu-value-to".  The page default unit depends on locale;
+    # we look for the Celsius value (<span class="wu-value-to">).
+    max_match = re.search(
+        r'Max</span>.*?<span class="wu-value wu-value-to">\s*(-?\d+(?:\.\d+)?)',
+        html,
+        re.DOTALL,
+    )
+    if max_match:
+        temp_c = float(max_match.group(1))
+        if city.unit == "fahrenheit":
+            return round(temp_c * 9 / 5 + 32, 1)
+        return temp_c
+
+    # Strategy 3: Grab any "high" temperature from the JSON-LD or inline data.
+    high_match = re.search(
+        r'"high":\s*"?(-?\d+(?:\.\d+)?)"?', html
+    )
+    if high_match:
+        val = float(high_match.group(1))
+        # WU JSON typically stores Celsius
+        if city.unit == "fahrenheit":
+            return round(val * 9 / 5 + 32, 1)
+        return val
+
+    logger.debug("WU: could not parse high temp from HTML for %s/%s", city_key, target_date)
+    return None
+
+
+async def _fetch_open_meteo_observed(
+    city_key: str,
+    target_date: date,
+    client: httpx.AsyncClient,
+) -> float | None:
+    """Fetch observed daily high from Open-Meteo Historical Archive (fallback)."""
+    city = CITIES.get(city_key)
+    if not city:
+        return None
+
+    temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
+    try:
+        resp = await client.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={
+                "latitude": city.latitude,
+                "longitude": city.longitude,
+                "daily": "temperature_2m_max",
+                "start_date": target_date.isoformat(),
+                "end_date": target_date.isoformat(),
+                "temperature_unit": temp_unit,
+                "timezone": "auto",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as e:
+        logger.debug("Open-Meteo archive failed for %s/%s: %s", city_key, target_date, e)
+        return None
+
+    daily = data.get("daily", {})
+    highs = daily.get("temperature_2m_max", [])
+    if highs and highs[0] is not None:
+        return float(highs[0])
+    return None
+
+
 async def fetch_observed_temperature(
     city_key: str,
     target_date: date,
 ) -> float | None:
     """Fetch the actual observed daily high temperature for a past date.
 
-    Uses Open-Meteo Historical Weather API for dates in the past.
+    Tries Weather Underground first (the actual Polymarket resolution
+    source), then falls back to Open-Meteo historical archive data.
     Returns the daily max temperature in the city's native unit, or None.
     """
     city = CITIES.get(city_key)
@@ -347,32 +460,27 @@ async def fetch_observed_temperature(
         logger.warning("Unknown city key: %s", city_key)
         return None
 
-    temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
-
     async with httpx.AsyncClient(timeout=20.0) as client:
-        try:
-            resp = await client.get(
-                "https://archive-api.open-meteo.com/v1/archive",
-                params={
-                    "latitude": city.latitude,
-                    "longitude": city.longitude,
-                    "daily": "temperature_2m_max",
-                    "start_date": target_date.isoformat(),
-                    "end_date": target_date.isoformat(),
-                    "temperature_unit": temp_unit,
-                    "timezone": "auto",
-                },
+        # Primary: Weather Underground (Polymarket resolution source)
+        temp = await _fetch_wunderground_high(city_key, target_date, client)
+        if temp is not None:
+            logger.info(
+                "WU observed high for %s/%s: %.1f°%s",
+                city_key, target_date, temp,
+                "F" if city.unit == "fahrenheit" else "C",
             )
-            resp.raise_for_status()
-            data = resp.json()
-        except (httpx.HTTPError, ValueError) as e:
-            logger.warning("Failed to fetch observed temp for %s/%s: %s",
-                           city_key, target_date, e)
-            return None
+            return temp
 
-    daily = data.get("daily", {})
-    highs = daily.get("temperature_2m_max", [])
-    if highs and highs[0] is not None:
-        return float(highs[0])
+        # Fallback: Open-Meteo archive (model reanalysis, may differ by ±1°)
+        temp = await _fetch_open_meteo_observed(city_key, target_date, client)
+        if temp is not None:
+            logger.info(
+                "Open-Meteo observed high for %s/%s: %.1f°%s (WU unavailable)",
+                city_key, target_date, temp,
+                "F" if city.unit == "fahrenheit" else "C",
+            )
+            return temp
 
+    logger.warning("Could not fetch observed temp for %s/%s from any source",
+                   city_key, target_date)
     return None

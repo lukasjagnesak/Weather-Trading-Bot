@@ -7,7 +7,13 @@ from pydantic_settings import BaseSettings
 
 
 class CityConfig:
-    """Weather station configuration for a tradeable city."""
+    """Weather station configuration for a tradeable city.
+
+    Coordinates must match the exact Weather Underground (WU) station that
+    Polymarket uses for resolution.  Each market's rules name a specific
+    ICAO station; forecasting for a different location introduces
+    systematic bias that erodes edge.
+    """
 
     def __init__(
         self,
@@ -16,33 +22,123 @@ class CityConfig:
         longitude: float,
         unit: str = "celsius",
         polymarket_tag: str = "temperature",
+        icao: str = "",
+        wunderground_url: str = "",
     ):
         self.name = name
         self.latitude = latitude
         self.longitude = longitude
         self.unit = unit  # "celsius" or "fahrenheit"
         self.polymarket_tag = polymarket_tag
+        self.icao = icao  # ICAO station code used by Polymarket for resolution
+        self.wunderground_url = wunderground_url  # WU history page for verification
 
 
-# Cities with active Polymarket temperature markets
+# ---------------------------------------------------------------------------
+# Cities with active Polymarket temperature markets.
+#
+# Coordinates are pinned to the Weather Underground station that each
+# Polymarket market references in its resolution rules.  Do NOT use
+# "city-centre" coordinates — they can differ by 20-50 km from the
+# resolution station, which is enough to shift the daily-high by 1-2 °C
+# and destroy the bot's edge.
+#
+# Station mapping verified from Polymarket market rules & Degen Doppler:
+#   US cities  → Degen Doppler / Polymarket rules (Wunderground)
+#   Int'l      → Polymarket individual market "Rules" section
+#   Taipei     → NOAA RCTP (Taoyuan International Airport)
+# ---------------------------------------------------------------------------
 CITIES: dict[str, CityConfig] = {
-    "nyc": CityConfig("New York City", 40.7789, -73.8740, unit="fahrenheit"),
-    "london": CityConfig("London", 51.4706, -0.4619, unit="celsius"),
-    "paris": CityConfig("Paris", 48.8566, 2.3522, unit="celsius"),
-    "tokyo": CityConfig("Tokyo", 35.7646, 140.3864, unit="celsius"),
-    "seoul": CityConfig("Seoul", 37.5665, 126.9780, unit="celsius"),
-    "shanghai": CityConfig("Shanghai", 31.1434, 121.8052, unit="celsius"),
-    "ankara": CityConfig("Ankara", 39.9334, 32.8597, unit="celsius"),
-    "toronto": CityConfig("Toronto", 43.6777, -79.6248, unit="fahrenheit"),
-    "chicago": CityConfig("Chicago", 41.9742, -87.9073, unit="fahrenheit"),
-    "dallas": CityConfig("Dallas", 32.8998, -97.0403, unit="fahrenheit"),
-    "atlanta": CityConfig("Atlanta", 33.6407, -84.4277, unit="fahrenheit"),
-    "miami": CityConfig("Miami", 25.7959, -80.2870, unit="fahrenheit"),
-    "sydney": CityConfig("Sydney", -33.8688, 151.2093, unit="celsius"),
-    "seattle": CityConfig("Seattle", 47.4502, -122.3088, unit="fahrenheit"),
-    "wellington": CityConfig("Wellington", -41.3276, 174.8050, unit="celsius"),
-    "taipei": CityConfig("Taipei", 25.0330, 121.5654, unit="celsius"),
-    "lucknow": CityConfig("Lucknow", 26.8467, 80.9462, unit="celsius"),
+    # --- United States (Fahrenheit) ----------------------------------------
+    "nyc": CityConfig(
+        "New York City", 40.7772, -73.8726, unit="fahrenheit",
+        icao="KLGA",
+        wunderground_url="https://www.wunderground.com/history/daily/us/new-york-city/KLGA",
+    ),
+    "chicago": CityConfig(
+        "Chicago", 41.9742, -87.9073, unit="fahrenheit",
+        icao="KORD",
+        wunderground_url="https://www.wunderground.com/history/daily/us/chicago/KORD",
+    ),
+    "dallas": CityConfig(
+        "Dallas", 32.8471, -96.8518, unit="fahrenheit",
+        icao="KDAL",
+        wunderground_url="https://www.wunderground.com/history/daily/us/dallas/KDAL",
+    ),
+    "atlanta": CityConfig(
+        "Atlanta", 33.6407, -84.4277, unit="fahrenheit",
+        icao="KATL",
+        wunderground_url="https://www.wunderground.com/history/daily/us/atlanta/KATL",
+    ),
+    "miami": CityConfig(
+        "Miami", 25.7959, -80.2870, unit="fahrenheit",
+        icao="KMIA",
+        wunderground_url="https://www.wunderground.com/history/daily/us/miami/KMIA",
+    ),
+    "seattle": CityConfig(
+        "Seattle", 47.4502, -122.3088, unit="fahrenheit",
+        icao="KSEA",
+        wunderground_url="https://www.wunderground.com/history/daily/us/seattle/KSEA",
+    ),
+    # --- Canada (Fahrenheit on Polymarket) ---------------------------------
+    "toronto": CityConfig(
+        "Toronto", 43.6777, -79.6248, unit="fahrenheit",
+        icao="CYYZ",
+        wunderground_url="https://www.wunderground.com/history/daily/ca/mississauga/CYYZ",
+    ),
+    # --- Europe (Celsius) --------------------------------------------------
+    "london": CityConfig(
+        "London", 51.5053, 0.0553, unit="celsius",
+        icao="EGLC",
+        wunderground_url="https://www.wunderground.com/history/daily/gb/london/EGLC",
+    ),
+    "paris": CityConfig(
+        "Paris", 49.0097, 2.5479, unit="celsius",
+        icao="LFPG",
+        wunderground_url="https://www.wunderground.com/history/daily/fr/paris/LFPG",
+    ),
+    "ankara": CityConfig(
+        "Ankara", 40.1281, 32.9951, unit="celsius",
+        icao="LTAC",
+        wunderground_url="https://www.wunderground.com/history/daily/tr/ankara/LTAC",
+    ),
+    # --- Asia (Celsius) ----------------------------------------------------
+    "tokyo": CityConfig(
+        "Tokyo", 35.5494, 139.7798, unit="celsius",
+        icao="RJTT",
+        wunderground_url="https://www.wunderground.com/history/daily/jp/tokyo/RJTT",
+    ),
+    "seoul": CityConfig(
+        "Seoul", 37.4602, 126.4407, unit="celsius",
+        icao="RKSI",
+        wunderground_url="https://www.wunderground.com/history/daily/kr/incheon/RKSI",
+    ),
+    "shanghai": CityConfig(
+        "Shanghai", 31.1443, 121.8052, unit="celsius",
+        icao="ZSPD",
+        wunderground_url="https://www.wunderground.com/history/daily/cn/shanghai/ZSPD",
+    ),
+    "taipei": CityConfig(
+        "Taipei", 25.0777, 121.2325, unit="celsius",
+        icao="RCTP",
+        wunderground_url="https://www.wunderground.com/history/daily/tw/taoyuan-district/RCTP",
+    ),
+    "lucknow": CityConfig(
+        "Lucknow", 26.7606, 80.8893, unit="celsius",
+        icao="VILK",
+        wunderground_url="https://www.wunderground.com/history/daily/in/lucknow/VILK",
+    ),
+    # --- Oceania (Celsius) -------------------------------------------------
+    "sydney": CityConfig(
+        "Sydney", -33.9461, 151.1772, unit="celsius",
+        icao="YSSY",
+        wunderground_url="https://www.wunderground.com/history/daily/au/sydney/YSSY",
+    ),
+    "wellington": CityConfig(
+        "Wellington", -41.3272, 174.8053, unit="celsius",
+        icao="NZWN",
+        wunderground_url="https://www.wunderground.com/history/daily/nz/wellington/NZWN",
+    ),
 }
 
 
