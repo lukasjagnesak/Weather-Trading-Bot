@@ -333,6 +333,77 @@ async def verify_all_cities(
     return results
 
 
+async def fetch_current_observed_high(
+    city_key: str,
+) -> float | None:
+    """Fetch today's observed maximum temperature so far (real-time).
+
+    Uses Open-Meteo hourly data up to the current hour to determine
+    the highest temperature recorded today.  This is the key input
+    for certainty bets: after ~3 PM local time the daily high is
+    essentially known.
+
+    Returns the observed high in the city's native unit, or None.
+    """
+    city = CITIES.get(city_key)
+    if not city:
+        return None
+
+    temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
+    today = date.today()
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
+            resp = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": city.latitude,
+                    "longitude": city.longitude,
+                    "hourly": "temperature_2m",
+                    "start_date": today.isoformat(),
+                    "end_date": today.isoformat(),
+                    "temperature_unit": temp_unit,
+                    "timezone": city.timezone,
+                    "past_hours": 24,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.debug("Failed to fetch current observed high for %s: %s", city_key, e)
+            return None
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    temps = hourly.get("temperature_2m", [])
+
+    if not times or not temps:
+        return None
+
+    # Find the current hour in local time and get max temp up to now
+    from datetime import timezone as tz
+    from zoneinfo import ZoneInfo
+
+    local_now = datetime.now(ZoneInfo(city.timezone))
+    current_hour_str = local_now.strftime("%Y-%m-%dT%H:00")
+
+    observed_temps = []
+    for t, temp in zip(times, temps):
+        if temp is not None and t <= current_hour_str:
+            observed_temps.append(temp)
+
+    if not observed_temps:
+        return None
+
+    high = max(observed_temps)
+    logger.info(
+        "Current observed high for %s: %.1f°%s (up to %s local)",
+        city_key, high, "F" if city.unit == "fahrenheit" else "C",
+        local_now.strftime("%H:%M"),
+    )
+    return high
+
+
 async def _fetch_wunderground_high(
     city_key: str,
     target_date: date,

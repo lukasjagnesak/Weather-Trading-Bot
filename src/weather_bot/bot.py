@@ -18,7 +18,7 @@ from .models import PortfolioState
 from .risk import apply_risk_controls
 from .telegram import format_daily_report, format_trade_alert, send_telegram
 from .trading import detect_signals, execute_signal
-from .verification import verify_all_cities
+from .verification import fetch_current_observed_high, verify_all_cities
 from .weather import fetch_all_cities
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,25 @@ async def run_scan(
     verified = await verify_all_cities(city_keys, dates)
     logger.info("Got verified forecasts for %d city-date combinations", len(verified))
 
+    # Step 3c: Fetch real-time observed highs for today's certainty bets
+    observed_highs: dict[str, float] = {}
+    if settings.certainty_enabled:
+        logger.info("Fetching real-time observed temperatures for certainty strategy...")
+        for ck in city_keys:
+            try:
+                obs = await fetch_current_observed_high(ck)
+                if obs is not None:
+                    observed_highs[ck] = obs
+            except Exception as e:
+                logger.debug("Failed to fetch observed high for %s: %s", ck, e)
+        if observed_highs:
+            logger.info("Got observed highs for %d cities: %s",
+                        len(observed_highs),
+                        ", ".join(f"{k}={v:.1f}" for k, v in observed_highs.items()))
+
     # Step 4: Detect trading signals (edge + outcome verification)
-    signals = detect_signals(outcomes, forecasts, settings, portfolio, verified=verified)
+    signals = detect_signals(outcomes, forecasts, settings, portfolio, verified=verified,
+                             observed_highs=observed_highs)
     if not signals:
         logger.info("No trading signals found (no sufficient edge)")
         return []

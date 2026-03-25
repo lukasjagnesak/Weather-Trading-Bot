@@ -24,6 +24,7 @@ class CityConfig:
         polymarket_tag: str = "temperature",
         icao: str = "",
         wunderground_url: str = "",
+        timezone: str = "UTC",
     ):
         self.name = name
         self.latitude = latitude
@@ -32,6 +33,7 @@ class CityConfig:
         self.polymarket_tag = polymarket_tag
         self.icao = icao  # ICAO station code used by Polymarket for resolution
         self.wunderground_url = wunderground_url  # WU history page for verification
+        self.timezone = timezone  # IANA timezone for local time checks
 
 
 # ---------------------------------------------------------------------------
@@ -52,91 +54,91 @@ CITIES: dict[str, CityConfig] = {
     # --- United States (Fahrenheit) ----------------------------------------
     "nyc": CityConfig(
         "New York City", 40.7772, -73.8726, unit="fahrenheit",
-        icao="KLGA",
+        icao="KLGA", timezone="America/New_York",
         wunderground_url="https://www.wunderground.com/history/daily/us/new-york-city/KLGA",
     ),
     "chicago": CityConfig(
         "Chicago", 41.9742, -87.9073, unit="fahrenheit",
-        icao="KORD",
+        icao="KORD", timezone="America/Chicago",
         wunderground_url="https://www.wunderground.com/history/daily/us/chicago/KORD",
     ),
     "dallas": CityConfig(
         "Dallas", 32.8471, -96.8518, unit="fahrenheit",
-        icao="KDAL",
+        icao="KDAL", timezone="America/Chicago",
         wunderground_url="https://www.wunderground.com/history/daily/us/dallas/KDAL",
     ),
     "atlanta": CityConfig(
         "Atlanta", 33.6407, -84.4277, unit="fahrenheit",
-        icao="KATL",
+        icao="KATL", timezone="America/New_York",
         wunderground_url="https://www.wunderground.com/history/daily/us/atlanta/KATL",
     ),
     "miami": CityConfig(
         "Miami", 25.7959, -80.2870, unit="fahrenheit",
-        icao="KMIA",
+        icao="KMIA", timezone="America/New_York",
         wunderground_url="https://www.wunderground.com/history/daily/us/miami/KMIA",
     ),
     "seattle": CityConfig(
         "Seattle", 47.4502, -122.3088, unit="fahrenheit",
-        icao="KSEA",
+        icao="KSEA", timezone="America/Los_Angeles",
         wunderground_url="https://www.wunderground.com/history/daily/us/seattle/KSEA",
     ),
     # --- Canada (Fahrenheit on Polymarket) ---------------------------------
     "toronto": CityConfig(
         "Toronto", 43.6777, -79.6248, unit="fahrenheit",
-        icao="CYYZ",
+        icao="CYYZ", timezone="America/Toronto",
         wunderground_url="https://www.wunderground.com/history/daily/ca/mississauga/CYYZ",
     ),
     # --- Europe (Celsius) --------------------------------------------------
     "london": CityConfig(
         "London", 51.5053, 0.0553, unit="celsius",
-        icao="EGLC",
+        icao="EGLC", timezone="Europe/London",
         wunderground_url="https://www.wunderground.com/history/daily/gb/london/EGLC",
     ),
     "paris": CityConfig(
         "Paris", 49.0097, 2.5479, unit="celsius",
-        icao="LFPG",
+        icao="LFPG", timezone="Europe/Paris",
         wunderground_url="https://www.wunderground.com/history/daily/fr/paris/LFPG",
     ),
     "ankara": CityConfig(
         "Ankara", 40.1281, 32.9951, unit="celsius",
-        icao="LTAC",
+        icao="LTAC", timezone="Europe/Istanbul",
         wunderground_url="https://www.wunderground.com/history/daily/tr/ankara/LTAC",
     ),
     # --- Asia (Celsius) ----------------------------------------------------
     "tokyo": CityConfig(
         "Tokyo", 35.5494, 139.7798, unit="celsius",
-        icao="RJTT",
+        icao="RJTT", timezone="Asia/Tokyo",
         wunderground_url="https://www.wunderground.com/history/daily/jp/tokyo/RJTT",
     ),
     "seoul": CityConfig(
         "Seoul", 37.4602, 126.4407, unit="celsius",
-        icao="RKSI",
+        icao="RKSI", timezone="Asia/Seoul",
         wunderground_url="https://www.wunderground.com/history/daily/kr/incheon/RKSI",
     ),
     "shanghai": CityConfig(
         "Shanghai", 31.1443, 121.8052, unit="celsius",
-        icao="ZSPD",
+        icao="ZSPD", timezone="Asia/Shanghai",
         wunderground_url="https://www.wunderground.com/history/daily/cn/shanghai/ZSPD",
     ),
     "taipei": CityConfig(
         "Taipei", 25.0777, 121.2325, unit="celsius",
-        icao="RCTP",
+        icao="RCTP", timezone="Asia/Taipei",
         wunderground_url="https://www.wunderground.com/history/daily/tw/taoyuan-district/RCTP",
     ),
     "lucknow": CityConfig(
         "Lucknow", 26.7606, 80.8893, unit="celsius",
-        icao="VILK",
+        icao="VILK", timezone="Asia/Kolkata",
         wunderground_url="https://www.wunderground.com/history/daily/in/lucknow/VILK",
     ),
     # --- Oceania (Celsius) -------------------------------------------------
     "sydney": CityConfig(
         "Sydney", -33.9461, 151.1772, unit="celsius",
-        icao="YSSY",
+        icao="YSSY", timezone="Australia/Sydney",
         wunderground_url="https://www.wunderground.com/history/daily/au/sydney/YSSY",
     ),
     "wellington": CityConfig(
         "Wellington", -41.3272, 174.8053, unit="celsius",
-        icao="NZWN",
+        icao="NZWN", timezone="Pacific/Auckland",
         wunderground_url="https://www.wunderground.com/history/daily/nz/wellington/NZWN",
     ),
 }
