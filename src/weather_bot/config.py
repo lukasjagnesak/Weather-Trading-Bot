@@ -184,7 +184,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_trade_alerts: bool = True  # send alert on each trade
     telegram_daily_report: bool = True  # send daily summary
-    telegram_daily_report_hour: int = 7  # UTC hour for daily report
+    telegram_daily_report_hour: int = 7  # UTC hour for daily report (8:00 CET)
 
     # Copy-trading
     copy_trade_enabled: bool = False
