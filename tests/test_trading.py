@@ -61,9 +61,9 @@ class TestDetectSignals:
 
         # Market priced at 20% but model says 40%
         outcomes = [
-            self._make_outcome("nyc", date(2026, 3, 20), "58-59", 57.5, 59.5, 0.20),
-            self._make_outcome("nyc", date(2026, 3, 20), "60-61", 59.5, 61.5, 0.30),
-            self._make_outcome("nyc", date(2026, 3, 20), "≥62", 61.5, float("inf"), 0.50),
+            self._make_outcome("nyc", date(2026, 3, 20), "58-59", 58.0, 60.0, 0.20),
+            self._make_outcome("nyc", date(2026, 3, 20), "60-61", 60.0, 62.0, 0.30),
+            self._make_outcome("nyc", date(2026, 3, 20), "≥62", 62.0, float("inf"), 0.50),
         ]
 
         # Ensemble centered at 59 -> should make "58-59" bucket more probable
@@ -92,16 +92,18 @@ class TestDetectSignals:
         settings.max_position_pct = 0.10
         portfolio = PortfolioState(bankroll=1000.0, peak_bankroll=1000.0)
 
-        # Mean=59, spread=3 → 58-59 bucket is most probable (~36%)
+        # Mean=59, tight spread=1.5 → 58-59 bucket is most probable
+        # Use multiple models to avoid deterministic_fallback flag
         import numpy as np
         np.random.seed(42)
-        members = list(np.random.normal(59, 3, 31))
+        members_gfs = list(np.random.normal(59, 1.5, 31))
+        members_ecmwf = list(np.random.normal(59, 1.5, 51))
         outcomes = [
-            self._make_outcome("nyc", date(2026, 3, 20), "≤55", float("-inf"), 55.5, 0.12),
-            self._make_outcome("nyc", date(2026, 3, 20), "56-57", 55.5, 57.5, 0.18),
-            self._make_outcome("nyc", date(2026, 3, 20), "58-59", 57.5, 59.5, 0.35),
-            self._make_outcome("nyc", date(2026, 3, 20), "60-61", 59.5, 61.5, 0.22),
-            self._make_outcome("nyc", date(2026, 3, 20), "≥62", 61.5, float("inf"), 0.13),
+            self._make_outcome("nyc", date(2026, 3, 20), "≤55", float("-inf"), 56.0, 0.05),
+            self._make_outcome("nyc", date(2026, 3, 20), "56-57", 56.0, 58.0, 0.10),
+            self._make_outcome("nyc", date(2026, 3, 20), "58-59", 58.0, 60.0, 0.15),
+            self._make_outcome("nyc", date(2026, 3, 20), "60-61", 60.0, 62.0, 0.10),
+            self._make_outcome("nyc", date(2026, 3, 20), "≥62", 62.0, float("inf"), 0.05),
         ]
         outcomes[0].bucket.is_lower_tail = True
         outcomes[4].bucket.is_upper_tail = True
@@ -112,9 +114,16 @@ class TestDetectSignals:
                     city="nyc",
                     target_date=date(2026, 3, 20),
                     model_name="gfs_seamless",
-                    members=members,
+                    members=members_gfs,
                     unit="fahrenheit",
-                )
+                ),
+                EnsembleForecast(
+                    city="nyc",
+                    target_date=date(2026, 3, 20),
+                    model_name="ecmwf_ifs025",
+                    members=members_ecmwf,
+                    unit="fahrenheit",
+                ),
             ]
         }
 
@@ -123,9 +132,8 @@ class TestDetectSignals:
         yes_signals = [s for s in signals if s.side == "BUY_YES"]
         assert len(yes_signals) == 1
         assert yes_signals[0].outcome.bucket.label == "58-59"
-        # NO signals only allowed if NO token is 75-95c — with these prices
-        # (NO prices = 1 - YES price), none qualify for certainty mode
+        # NO signals only allowed if NO token is 50-95c
         no_signals = [s for s in signals if s.side == "BUY_NO"]
         for s in no_signals:
-            assert 0.75 <= s.outcome.current_price_no <= 0.95, \
-                f"BUY_NO should only happen at 75-95c NO price, got {s.outcome.current_price_no}"
+            assert 0.50 <= s.outcome.current_price_no <= 0.95, \
+                f"BUY_NO should only happen at 50-95c NO price, got {s.outcome.current_price_no}"

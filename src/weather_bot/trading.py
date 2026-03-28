@@ -102,6 +102,13 @@ def detect_signals(
                 np.min(fc.members), np.max(fc.members),
             )
 
+        # Skip edge trading on deterministic fallback — synthetic ensembles
+        # have fake spread that doesn't reflect real forecast uncertainty.
+        # Only certainty strategy (with observed temps) is allowed on fallback.
+        is_deterministic = any(
+            fc.model_name == "deterministic_fallback" for fc in forecast_list
+        )
+
         # Compute probabilities for all buckets at once
         buckets = [o.bucket for o in city_outcomes]
         model_probs = compute_bucket_probabilities(forecast_list, buckets)
@@ -131,13 +138,19 @@ def detect_signals(
 
         if best_outcome and best_prob > 0.20:
             # BUY_YES on the most probable bucket — the core bet
-            signal = _forecast_signal(
-                best_outcome, best_prob, best_outcome.current_price_yes,
-                "BUY_YES", confidence, settings, portfolio, city, target_date,
-                vf=vf,
-            )
-            if signal:
-                signals.append(signal)
+            # Skip edge trading on deterministic fallback (fake spread)
+            signal = None
+            if not is_deterministic:
+                signal = _forecast_signal(
+                    best_outcome, best_prob, best_outcome.current_price_yes,
+                    "BUY_YES", confidence, settings, portfolio, city, target_date,
+                    vf=vf,
+                )
+                if signal:
+                    signals.append(signal)
+            else:
+                logger.debug("Skipping edge BUY_YES for %s/%s: deterministic fallback",
+                             city, target_date)
 
             # Certainty strategy runs independently (not as fallback)
             if settings.certainty_enabled:
@@ -170,13 +183,18 @@ def detect_signals(
             if our_no_prob < 0.70:
                 continue  # need ≥70% model confidence it's wrong
 
-            signal = _forecast_signal(
-                outcome, model_prob, no_price,
-                "BUY_NO", confidence, settings, portfolio, city, target_date,
-                vf=vf,
-            )
-            if signal:
-                signals.append(signal)
+            signal = None
+            if not is_deterministic:
+                signal = _forecast_signal(
+                    outcome, model_prob, no_price,
+                    "BUY_NO", confidence, settings, portfolio, city, target_date,
+                    vf=vf,
+                )
+                if signal:
+                    signals.append(signal)
+            else:
+                logger.debug("Skipping edge BUY_NO for %s/%s: deterministic fallback",
+                             city, target_date)
 
             if settings.certainty_enabled:
                 cert = _certainty_signal(
@@ -216,14 +234,14 @@ def _forecast_signal(
         effective_price = token_price
         # Use Gaussian probability from verification if available
         if vf is not None:
-            sigma = max(vf.spread, 0.5)
+            sigma = max(vf.spread, 1.5)
             true_prob = _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
         edge = true_prob - effective_price
     else:  # BUY_NO
         true_prob = 1.0 - model_prob
         effective_price = token_price
         if vf is not None:
-            sigma = max(vf.spread, 0.5)
+            sigma = max(vf.spread, 1.5)
             true_prob = 1.0 - _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
         edge = true_prob - effective_price
 
@@ -327,14 +345,14 @@ def _certainty_signal(
         # Fall back to verification/model data
         if side == "BUY_YES":
             if vf is not None:
-                sigma = max(vf.spread, 0.5)
+                sigma = max(vf.spread, 1.5)
                 true_prob = _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
             else:
                 true_prob = model_prob
             effective_price = token_price
         else:  # BUY_NO
             if vf is not None:
-                sigma = max(vf.spread, 0.5)
+                sigma = max(vf.spread, 1.5)
                 true_prob = 1.0 - _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
             else:
                 true_prob = 1.0 - model_prob

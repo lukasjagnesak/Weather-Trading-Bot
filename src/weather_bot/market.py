@@ -23,11 +23,15 @@ def _parse_temperature_bucket(
 ) -> TemperatureBucket | None:
     """Parse a temperature bucket from market question text and group item title.
 
+    Polymarket resolves temperatures to WHOLE degrees (e.g. 13°C means
+    exactly 13, which is the range [13, 14) in continuous space).
+    Bucket bounds must match WU resolution precision.
+
     Handles formats like:
-    - "13°C" -> exact degree (12.5 to 13.5)
-    - "58-59" -> range in °F
-    - "≤27°F" or "27 or below" -> lower tail
-    - "≥38°F" or "38 or above" -> upper tail
+    - "13°C" -> exact degree [13, 14)
+    - "58-59" -> range in °F [58, 60)
+    - "≤27°F" or "27 or below" -> lower tail (-inf, 28)
+    - "≥38°F" or "38 or above" -> upper tail [38, +inf)
     """
     if group_item_title:
         title = group_item_title.strip()
@@ -35,9 +39,6 @@ def _parse_temperature_bucket(
         title = question
 
     # Check for tail buckets
-    is_lower_tail = False
-    is_upper_tail = False
-
     lower_tail_patterns = [
         r"[≤<](\d+)",
         r"(\d+)\s*or\s*below",
@@ -56,10 +57,11 @@ def _parse_temperature_bucket(
         m = re.search(pattern, title, re.IGNORECASE)
         if m:
             val = float(m.group(1))
+            # "≤27" means 27 or below → includes 27 → upper bound is 28
             return TemperatureBucket(
                 label=title,
                 lower=float("-inf"),
-                upper=val + 0.5,
+                upper=val + 1,
                 is_lower_tail=True,
             )
 
@@ -67,32 +69,34 @@ def _parse_temperature_bucket(
         m = re.search(pattern, title, re.IGNORECASE)
         if m:
             val = float(m.group(1))
+            # "≥38" means 38 or above → lower bound is 38
             return TemperatureBucket(
                 label=title,
-                lower=val - 0.5,
+                lower=val,
                 upper=float("inf"),
                 is_upper_tail=True,
             )
 
     # Range bucket: "58-59" or "58-59°F"
+    # WU rounds to whole degrees, so "58-59" means [58, 60)
     range_match = re.search(r"(\d+)\s*[-–]\s*(\d+)", title)
     if range_match:
         low = float(range_match.group(1))
         high = float(range_match.group(2))
         return TemperatureBucket(
             label=title,
-            lower=low - 0.5,
-            upper=high + 0.5,
+            lower=low,
+            upper=high + 1,
         )
 
-    # Single degree: "13°C" or "13" -> treat as 12.5 to 13.5
+    # Single degree: "13°C" or "13" -> [13, 14)
     single_match = re.search(r"(\d+)\s*°?[CF]?", title)
     if single_match:
         val = float(single_match.group(1))
         return TemperatureBucket(
             label=title,
-            lower=val - 0.5,
-            upper=val + 0.5,
+            lower=val,
+            upper=val + 1,
         )
 
     logger.warning("Could not parse temperature bucket from: %s", title)

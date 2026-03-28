@@ -120,38 +120,41 @@ def _parse_bucket_label(label: str, unit: str) -> TemperatureBucket | None:
     label = label.strip()
 
     # Lower tail: "27°F or below" / "2°C or below"
-    m = re.match(r"(\d+)°[FC]?\s+or\s+below", label, re.IGNORECASE)
+    # WU rounds to whole degrees: "≤27" includes 27 → upper=28
+    m = re.match(r"(-?\d+)°[FC]?\s+or\s+below", label, re.IGNORECASE)
     if m:
         val = float(m.group(1))
         return TemperatureBucket(
-            label=label, lower=float("-inf"), upper=val + 0.5,
+            label=label, lower=float("-inf"), upper=val + 1,
             is_lower_tail=True,
         )
 
     # Upper tail: "38°F or higher" / "8°C or higher"
-    m = re.match(r"(\d+)°[FC]?\s+or\s+higher", label, re.IGNORECASE)
+    # "≥38" means 38 and above → lower=38
+    m = re.match(r"(-?\d+)°[FC]?\s+or\s+higher", label, re.IGNORECASE)
     if m:
         val = float(m.group(1))
         return TemperatureBucket(
-            label=label, lower=val - 0.5, upper=float("inf"),
+            label=label, lower=val, upper=float("inf"),
             is_upper_tail=True,
         )
 
     # Range: "28-29°F" / "54-55°F"
-    m = re.match(r"(\d+)-(\d+)°?[FC]?", label)
+    # WU whole degrees: "28-29" means [28, 30)
+    m = re.match(r"(-?\d+)-(-?\d+)°?[FC]?", label)
     if m:
         low = float(m.group(1))
         high = float(m.group(2))
         return TemperatureBucket(
-            label=label, lower=low - 0.5, upper=high + 0.5,
+            label=label, lower=low, upper=high + 1,
         )
 
-    # Single degree celsius: "5°C"
+    # Single degree celsius: "5°C" → [5, 6)
     m = re.match(r"(-?\d+)°C", label)
     if m:
         val = float(m.group(1))
         return TemperatureBucket(
-            label=label, lower=val - 0.5, upper=val + 0.5,
+            label=label, lower=val, upper=val + 1,
         )
 
     logger.debug("Could not parse bucket label: %s", label)

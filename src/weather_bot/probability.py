@@ -51,13 +51,13 @@ def compute_bucket_probabilities(
                 "icon_seamless": 0.1,
             }
 
-    # Get city-specific spread inflation
-    spread_inflation = 1.2  # default
+    # Get city-specific spread inflation (minimum 1.5 to avoid overconfidence)
+    spread_inflation = 1.5  # default — conservative
     if cal:
         if city and city in cal.city_spread_inflation:
-            spread_inflation = cal.city_spread_inflation[city]
+            spread_inflation = max(cal.city_spread_inflation[city], 1.5)
         else:
-            spread_inflation = cal.global_spread_inflation
+            spread_inflation = max(cal.global_spread_inflation, 1.5)
 
     # Compute per-model probabilities, then combine
     combined_probs: dict[str, float] = {b.label: 0.0 for b in buckets}
@@ -119,8 +119,11 @@ def _emos_bucket_probabilities(
     mu = bias_a0 + bias_a1 * raw_mean
     sigma = float(np.std(members)) * spread_inflation
 
-    # Minimum sigma to avoid degenerate distributions
-    sigma = max(sigma, 0.5)
+    # Minimum sigma to avoid overconfident distributions.
+    # WU station temps can differ from Open-Meteo forecasts by 1-2°C
+    # (different measurement location, microclimate, rounding).
+    # Using sigma < 1.5 leads to overconfident bets on wrong buckets.
+    sigma = max(sigma, 1.5)
 
     probs: dict[str, float] = {}
 

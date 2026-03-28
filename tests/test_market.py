@@ -15,8 +15,8 @@ class TestParseBucket:
             "celsius",
         )
         assert bucket is not None
-        assert bucket.lower == 12.5
-        assert bucket.upper == 13.5
+        assert bucket.lower == 13.0
+        assert bucket.upper == 14.0
         assert not bucket.is_lower_tail
         assert not bucket.is_upper_tail
 
@@ -27,8 +27,8 @@ class TestParseBucket:
             "fahrenheit",
         )
         assert bucket is not None
-        assert bucket.lower == 57.5
-        assert bucket.upper == 59.5
+        assert bucket.lower == 58.0
+        assert bucket.upper == 60.0
 
     def test_lower_tail(self):
         bucket = _parse_temperature_bucket(
@@ -38,7 +38,7 @@ class TestParseBucket:
         )
         assert bucket is not None
         assert bucket.is_lower_tail
-        assert bucket.upper == 27.5
+        assert bucket.upper == 28.0
 
     def test_upper_tail(self):
         bucket = _parse_temperature_bucket(
@@ -48,7 +48,7 @@ class TestParseBucket:
         )
         assert bucket is not None
         assert bucket.is_upper_tail
-        assert bucket.lower == 37.5
+        assert bucket.lower == 38.0
 
     def test_upper_tail_plus(self):
         bucket = _parse_temperature_bucket(

@@ -26,11 +26,11 @@ def _make_forecast(members, model="gfs_seamless"):
 def _make_buckets():
     """Create a simple set of temperature buckets."""
     return [
-        TemperatureBucket("≤55", float("-inf"), 55.5, is_lower_tail=True),
-        TemperatureBucket("56-57", 55.5, 57.5),
-        TemperatureBucket("58-59", 57.5, 59.5),
-        TemperatureBucket("60-61", 59.5, 61.5),
-        TemperatureBucket("≥62", 61.5, float("inf"), is_upper_tail=True),
+        TemperatureBucket("≤55", float("-inf"), 56.0, is_lower_tail=True),
+        TemperatureBucket("56-57", 56.0, 58.0),
+        TemperatureBucket("58-59", 58.0, 60.0),
+        TemperatureBucket("60-61", 60.0, 62.0),
+        TemperatureBucket("≥62", 62.0, float("inf"), is_upper_tail=True),
     ]
 
 
@@ -81,13 +81,13 @@ class TestBucketProbabilities:
 class TestRawEnsembleProbability:
     def test_all_members_in_bucket(self):
         forecast = _make_forecast([59.0] * 31)
-        bucket = TemperatureBucket("58-59", 57.5, 59.5)
+        bucket = TemperatureBucket("58-59", 58.0, 60.0)
         prob = compute_raw_ensemble_probability([forecast], bucket)
         assert prob == 1.0
 
     def test_no_members_in_bucket(self):
         forecast = _make_forecast([70.0] * 31)
-        bucket = TemperatureBucket("58-59", 57.5, 59.5)
+        bucket = TemperatureBucket("58-59", 58.0, 60.0)
         prob = compute_raw_ensemble_probability([forecast], bucket)
         assert prob == 0.0
 
