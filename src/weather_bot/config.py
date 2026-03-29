@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     # Risk parameters
     bankroll: float = 1000.0
     max_position_pct: float = 0.02  # max 2% of bankroll per position
-    min_edge_threshold: float = 0.08  # minimum 8% edge to trade
+    min_edge_threshold: float = 0.15  # minimum 15% edge to trade (conservative)
     kelly_fraction: float = 0.25  # quarter Kelly
     daily_loss_limit_pct: float = 0.03  # stop at 3% daily loss
     max_drawdown_pct: float = 0.15  # reduce size at 15% drawdown
@@ -172,7 +172,7 @@ class Settings(BaseSettings):
     certainty_enabled: bool = True
     certainty_min_model_prob: float = 0.70   # model must give ≥70% probability
     certainty_max_price: float = 0.95        # never pay more than 95c
-    certainty_position_pct: float = 0.07     # 7% of bankroll per certainty bet (~$1.12 at $16 bankroll)
+    certainty_position_pct: float = 0.12     # 12% of bankroll per certainty bet — primary profit source
 
     # Ensemble models to use
     ensemble_models: list[str] = Field(

@@ -86,6 +86,8 @@ def detect_signals(
         key = (outcome.city, outcome.target_date)
         grouped.setdefault(key, []).append(outcome)
 
+    today = date.today()
+
     for (city, target_date), city_outcomes in grouped.items():
         forecast_key = (city, target_date)
         forecast_list = forecasts_by_key.get(forecast_key)
@@ -108,6 +110,24 @@ def detect_signals(
         is_deterministic = any(
             fc.model_name == "deterministic_fallback" for fc in forecast_list
         )
+
+        # ── RISK GUARD: Edge only on D+0 ─────────────────────────
+        # D+1 forecast error is too high — edge strategy only trades today.
+        is_today = (target_date == today)
+
+        # ── RISK GUARD: Require model agreement for edge ─────────
+        # Only allow edge bets when all ensemble models agree (spread < 2°).
+        model_means = [float(np.mean(fc.members)) for fc in forecast_list]
+        model_spread = max(model_means) - min(model_means) if len(model_means) > 1 else 0.0
+        models_agree = model_spread < 2.0
+        if not models_agree:
+            logger.info(
+                "Models disagree for %s/%s: spread=%.1f° (%.1f vs %.1f) — skipping edge",
+                city, target_date, model_spread, min(model_means), max(model_means),
+            )
+
+        # Edge trading allowed only when: today + not deterministic + models agree
+        edge_allowed = is_today and not is_deterministic and models_agree
 
         # Compute probabilities for all buckets at once
         buckets = [o.bucket for o in city_outcomes]
@@ -138,9 +158,8 @@ def detect_signals(
 
         if best_outcome and best_prob > 0.20:
             # BUY_YES on the most probable bucket — the core bet
-            # Skip edge trading on deterministic fallback (fake spread)
             signal = None
-            if not is_deterministic:
+            if edge_allowed:
                 signal = _forecast_signal(
                     best_outcome, best_prob, best_outcome.current_price_yes,
                     "BUY_YES", confidence, settings, portfolio, city, target_date,
@@ -149,8 +168,10 @@ def detect_signals(
                 if signal:
                     signals.append(signal)
             else:
-                logger.debug("Skipping edge BUY_YES for %s/%s: deterministic fallback",
-                             city, target_date)
+                logger.debug("Skipping edge BUY_YES for %s/%s: %s",
+                             city, target_date,
+                             "D+1" if not is_today else
+                             "deterministic" if is_deterministic else "models disagree")
 
             # Certainty strategy runs independently (not as fallback)
             if settings.certainty_enabled:
@@ -183,18 +204,9 @@ def detect_signals(
             if our_no_prob < 0.70:
                 continue  # need ≥70% model confidence it's wrong
 
+            # Edge BUY_NO disabled — too risky, main source of losses.
+            # Only certainty BUY_NO (observed temps) is allowed.
             signal = None
-            if not is_deterministic:
-                signal = _forecast_signal(
-                    outcome, model_prob, no_price,
-                    "BUY_NO", confidence, settings, portfolio, city, target_date,
-                    vf=vf,
-                )
-                if signal:
-                    signals.append(signal)
-            else:
-                logger.debug("Skipping edge BUY_NO for %s/%s: deterministic fallback",
-                             city, target_date)
 
             if settings.certainty_enabled:
                 cert = _certainty_signal(
