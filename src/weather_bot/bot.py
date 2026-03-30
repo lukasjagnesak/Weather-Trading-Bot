@@ -56,6 +56,35 @@ def _fetch_onchain_balance(settings: Settings) -> float | None:
         return None
 
 
+async def _fetch_portfolio_value(settings: Settings) -> tuple[float, float] | None:
+    """Fetch cash balance and total portfolio value (cash + open positions).
+
+    Returns (cash, portfolio_value) or None if unavailable.
+    """
+    cash = _fetch_onchain_balance(settings)
+    if cash is None:
+        return None
+
+    # Fetch open positions value using our funder address
+    positions_value = 0.0
+    if settings.polymarket_funder_address:
+        try:
+            from .copytrading import fetch_wallet_positions
+            positions = await fetch_wallet_positions(settings.polymarket_funder_address)
+            for pos in positions:
+                # Position value = shares * current price
+                positions_value += pos.size * pos.current_price
+        except Exception as e:
+            logger.debug("Failed to fetch position values: %s", e)
+
+    portfolio_value = cash + positions_value
+    logger.info(
+        "PORTFOLIO: cash=$%.2f + positions=$%.2f = total=$%.2f",
+        cash, positions_value, portfolio_value,
+    )
+    return cash, portfolio_value
+
+
 async def run_scan(
     settings: Settings,
     portfolio: PortfolioState,
@@ -263,7 +292,14 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
                         )
                     # Send Telegram alert for each resolved trade
                     try:
-                        msg = format_resolution_alert(resolved, portfolio.bankroll)
+                        # Fetch fresh balance for resolution alert
+                        res_result = await _fetch_portfolio_value(settings)
+                        res_cash = res_result[0] if res_result else None
+                        res_pv = res_result[1] if res_result else None
+                        msg = format_resolution_alert(
+                            resolved, portfolio.bankroll,
+                            cash=res_cash, portfolio_value=res_pv,
+                        )
                         await send_telegram(msg, settings)
                     except Exception as e:
                         logger.warning("Telegram resolution alert failed: %s", e)
@@ -283,6 +319,14 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
             except Exception:
                 perf = None
 
+            # Fetch fresh balance for daily report
+            try:
+                dr_result = await _fetch_portfolio_value(settings)
+                dr_cash = dr_result[0] if dr_result else None
+                dr_pv = dr_result[1] if dr_result else None
+            except Exception:
+                dr_cash, dr_pv = None, None
+
             report = format_daily_report(
                 trades=all_trades_today,
                 bankroll=portfolio.bankroll,
@@ -290,6 +334,8 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
                 peak_bankroll=portfolio.peak_bankroll,
                 tracked_wallets=tracked_count,
                 performance=perf,
+                cash=dr_cash,
+                portfolio_value=dr_pv,
             )
             try:
                 await send_telegram(report, settings)
@@ -300,16 +346,20 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
             last_report_date = today
 
         # Sync bankroll with on-chain balance (live mode only)
+        cash_balance = None
+        portfolio_value = None
         try:
-            onchain = _fetch_onchain_balance(settings)
-            if onchain is not None:
+            result = await _fetch_portfolio_value(settings)
+            if result is not None:
+                cash_balance, portfolio_value = result
                 old_bankroll = portfolio.bankroll
-                portfolio.bankroll = onchain
-                portfolio.peak_bankroll = max(portfolio.peak_bankroll, onchain)
-                if abs(onchain - old_bankroll) > 0.01:
+                portfolio.bankroll = cash_balance
+                portfolio.peak_bankroll = max(portfolio.peak_bankroll, portfolio_value)
+                if abs(cash_balance - old_bankroll) > 0.01:
                     logger.info(
-                        "BANKROLL SYNC: $%.2f → $%.2f (on-chain USDC)",
-                        old_bankroll, onchain,
+                        "BANKROLL SYNC: $%.2f → $%.2f (cash=$%.2f, positions=$%.2f)",
+                        old_bankroll, cash_balance, cash_balance,
+                        portfolio_value - cash_balance,
                     )
         except Exception as e:
             logger.debug("Balance sync failed: %s", e)
@@ -328,8 +378,10 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
                 try:
                     scan_msg = format_scan_summary(
                         signals_count=len(results),
-                        markets_count=0,  # filled by run_scan log
+                        markets_count=0,
                         cities=settings.active_cities,
+                        cash=cash_balance,
+                        portfolio_value=portfolio_value,
                     )
                     await send_telegram(scan_msg, settings)
                 except Exception as e:

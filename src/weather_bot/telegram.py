@@ -72,11 +72,15 @@ def format_daily_report(
     peak_bankroll: float,
     tracked_wallets: int = 0,
     performance=None,
+    cash: float | None = None,
+    portfolio_value: float | None = None,
 ) -> str:
     """Format the daily summary report for Telegram.
 
     Args:
         performance: Optional PerformanceMetrics from evaluation module.
+        cash: Actual on-chain USDC balance.
+        portfolio_value: Cash + open positions value.
     """
     today = date.today().isoformat()
     drawdown = ((peak_bankroll - bankroll) / peak_bankroll * 100) if peak_bankroll > 0 else 0.0
@@ -87,12 +91,23 @@ def format_daily_report(
     lines = [
         f"\U0001f4cb <b>Daily Report — {today}</b>",
         "",
-        f"\U0001f4b0 Bankroll: <b>${bankroll:.2f}</b>",
+    ]
+
+    if cash is not None and portfolio_value is not None:
+        positions = portfolio_value - cash
+        lines.extend([
+            f"\U0001f4b5 Cash: <b>${cash:.2f}</b>",
+            f"\U0001f4bc Portfolio: <b>${portfolio_value:.2f}</b> (positions: ${positions:.2f})",
+        ])
+    else:
+        lines.append(f"\U0001f4b0 Bankroll: <b>${bankroll:.2f}</b>")
+
+    lines.extend([
         f"{pnl_emoji} Daily P&L: <b>{pnl_sign}${daily_pnl:.2f}</b>",
         f"\U0001f4c9 Drawdown: {drawdown:.1f}%",
         f"\U0001f4ca Peak: ${peak_bankroll:.2f}",
         "",
-    ]
+    ])
 
     if trades:
         executed = [t for t in trades if t.get("executed")]
@@ -128,23 +143,38 @@ def format_daily_report(
     return "\n".join(lines)
 
 
-def format_scan_summary(signals_count: int, markets_count: int, cities: list[str]) -> str:
+def format_scan_summary(
+    signals_count: int,
+    markets_count: int,
+    cities: list[str],
+    cash: float | None = None,
+    portfolio_value: float | None = None,
+) -> str:
     """Format a short scan completion notification."""
+    lines = []
     if signals_count > 0:
-        return (
-            f"\U0001f50d <b>Scan complete</b>\n"
-            f"\U0001f4b9 Signals: <b>{signals_count}</b>\n"
-            f"Cities: {', '.join(c.upper() for c in cities)}\n"
-            f"\u23f0 {datetime.utcnow().strftime('%H:%M UTC')}"
-        )
-    return (
-        f"\U0001f50d <b>Scan complete</b> — no signals\n"
-        f"Cities: {', '.join(c.upper() for c in cities)}\n"
-        f"\u23f0 {datetime.utcnow().strftime('%H:%M UTC')}"
-    )
+        lines.append(f"\U0001f50d <b>Scan complete</b>")
+        lines.append(f"\U0001f4b9 Signals: <b>{signals_count}</b>")
+    else:
+        lines.append(f"\U0001f50d <b>Scan complete</b> — no signals")
+
+    lines.append(f"Cities: {', '.join(c.upper() for c in cities)}")
+
+    if cash is not None and portfolio_value is not None:
+        positions = portfolio_value - cash
+        lines.append(f"\U0001f4b5 Cash: <b>${cash:.2f}</b> | Positions: ${positions:.2f}")
+        lines.append(f"\U0001f4bc Portfolio: <b>${portfolio_value:.2f}</b>")
+
+    lines.append(f"\u23f0 {datetime.utcnow().strftime('%H:%M UTC')}")
+    return "\n".join(lines)
 
 
-def format_resolution_alert(resolved: list[dict], bankroll: float) -> str:
+def format_resolution_alert(
+    resolved: list[dict],
+    bankroll: float,
+    cash: float | None = None,
+    portfolio_value: float | None = None,
+) -> str:
     """Format resolved trade results for Telegram."""
     total_pnl = sum(r.get("pnl", 0) for r in resolved)
     wins = sum(1 for r in resolved if r.get("outcome") == "win")
@@ -156,9 +186,15 @@ def format_resolution_alert(resolved: list[dict], bankroll: float) -> str:
         f"{emoji} <b>Trades resolved: {len(resolved)}</b>",
         f"\U0001f3af Results: {wins}W / {losses}L",
         f"\U0001f4b0 P&L: <b>{pnl_sign}${total_pnl:.2f}</b>",
-        f"\U0001f4b3 Bankroll: <b>${bankroll:.2f}</b>",
-        "",
     ]
+
+    if cash is not None and portfolio_value is not None:
+        positions = portfolio_value - cash
+        lines.append(f"\U0001f4b5 Cash: <b>${cash:.2f}</b> | Portfolio: <b>${portfolio_value:.2f}</b>")
+    else:
+        lines.append(f"\U0001f4b3 Bankroll: <b>${bankroll:.2f}</b>")
+
+    lines.append("")
 
     for r in resolved:
         result_emoji = "\u2705" if r.get("outcome") == "win" else "\u274c"
