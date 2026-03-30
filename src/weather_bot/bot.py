@@ -18,6 +18,7 @@ from .models import PortfolioState
 from .risk import apply_risk_controls
 from .telegram import format_daily_report, format_scan_summary, format_trade_alert, format_resolution_alert, send_telegram
 from .trading import detect_signals, execute_signal
+from .latency import detect_forecast_shifts, get_active_model_updates, is_model_update_window
 from .verification import fetch_current_observed_high, verify_all_cities
 from .weather import fetch_all_cities
 
@@ -58,17 +59,35 @@ async def run_scan(
     dates = list(set(k[1] for k in needed_keys))
 
     # Step 3: Fetch ensemble weather forecasts
+    # During model update windows, force fresh data to catch forecast shifts
+    in_update_window = is_model_update_window()
+    if in_update_window:
+        active_models = get_active_model_updates()
+        logger.info("MODEL UPDATE WINDOW — forcing fresh fetch (models updating: %s)",
+                     ", ".join(active_models))
+
     logger.info("Fetching ensemble forecasts for %d city-date combinations...", len(needed_keys))
     forecasts = await fetch_all_cities(
         city_keys=city_keys,
         target_dates=dates,
         models=settings.ensemble_models,
+        force_refresh=in_update_window and settings.latency_arb_enabled,
     )
     logger.info("Got forecasts for %d city-date combinations", len(forecasts))
 
     if not forecasts:
         logger.warning("No forecast data available — skipping this scan")
         return []
+
+    # Step 3a: Detect forecast shifts for latency arbitrage
+    forecast_shifts: dict[tuple[str, date], float] = {}
+    if settings.latency_arb_enabled:
+        forecast_shifts = detect_forecast_shifts(forecasts)
+        significant = {k: v for k, v in forecast_shifts.items()
+                       if abs(v) >= settings.latency_arb_min_shift}
+        if significant:
+            for (city, d), shift in significant.items():
+                logger.info("LATENCY OPPORTUNITY: %s/%s shifted %+.1f°", city, d, shift)
 
     # Step 3b: Cross-validate with multi-source deterministic forecasts
     logger.info("Fetching multi-source verification forecasts...")
@@ -93,7 +112,8 @@ async def run_scan(
 
     # Step 4: Detect trading signals (edge + outcome verification)
     signals = detect_signals(outcomes, forecasts, settings, portfolio, verified=verified,
-                             observed_highs=observed_highs)
+                             observed_highs=observed_highs,
+                             forecast_shifts=forecast_shifts)
     if not signals:
         logger.info("No trading signals found (no sufficient edge)")
         return []
@@ -271,8 +291,14 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
         except Exception as e:
             logger.error("Scan failed: %s", e, exc_info=True)
 
-        logger.info("Sleeping %d seconds until next scan...", settings.scan_interval)
-        await asyncio.sleep(settings.scan_interval)
+        # Dynamic scan interval: faster during model update windows
+        if settings.latency_arb_enabled and is_model_update_window():
+            interval = settings.scan_interval_model_update
+            logger.info("Model update window — next scan in %d seconds", interval)
+        else:
+            interval = settings.scan_interval
+            logger.info("Sleeping %d seconds until next scan...", interval)
+        await asyncio.sleep(interval)
 
 
 def _print_results_table(results: list[dict]) -> None:

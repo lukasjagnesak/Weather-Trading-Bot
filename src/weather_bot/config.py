@@ -192,7 +192,13 @@ class Settings(BaseSettings):
     copy_trade_scale: float = 0.5  # scale factor for copied positions (0-1)
 
     # Scan interval in seconds
-    scan_interval: int = 1800  # 30 minutes — markets move slowly, forecasts update every 6-12h
+    scan_interval: int = 1800  # 30 minutes — default between model updates
+    scan_interval_model_update: int = 300  # 5 minutes — during model update windows
+
+    # Latency arbitrage: trade immediately when forecast shifts after model update
+    latency_arb_enabled: bool = True
+    latency_arb_min_shift: float = 1.0  # minimum forecast shift (°C/°F) to trigger
+    latency_arb_edge_threshold: float = 0.05  # lower edge threshold (5%) for latency signals
 
     # Cities to trade (keys from CITIES dict)
     active_cities: list[str] = Field(

@@ -65,6 +65,7 @@ def detect_signals(
     portfolio: PortfolioState,
     verified: dict[tuple[str, date], VerifiedForecast] | None = None,
     observed_highs: dict[str, float] | None = None,
+    forecast_shifts: dict[tuple[str, date], float] | None = None,
 ) -> list[Signal]:
     """Scan all market outcomes and generate trading signals.
 
@@ -129,6 +130,20 @@ def detect_signals(
         # Edge trading allowed only when: today + not deterministic + models agree
         edge_allowed = is_today and not is_deterministic and models_agree
 
+        # ── LATENCY ARBITRAGE: detect forecast shifts ─────────
+        # When a new model run shifts the forecast, markets haven't adjusted yet.
+        # Use lower edge threshold and allow D+1 for shifted forecasts.
+        shift = forecast_shifts.get((city, target_date), 0.0) if forecast_shifts else 0.0
+        has_significant_shift = abs(shift) >= settings.latency_arb_min_shift
+        if has_significant_shift:
+            logger.info(
+                "LATENCY ARB %s/%s: forecast shifted %+.1f° — using lower edge threshold (%.0f%%)",
+                city, target_date, shift, settings.latency_arb_edge_threshold * 100,
+            )
+            # Allow edge trading even on D+1 if there's a significant shift
+            if not is_deterministic and models_agree:
+                edge_allowed = True
+
         # Compute probabilities for all buckets at once
         buckets = [o.bucket for o in city_outcomes]
         model_probs = compute_bucket_probabilities(forecast_list, buckets)
@@ -163,7 +178,7 @@ def detect_signals(
                 signal = _forecast_signal(
                     best_outcome, best_prob, best_outcome.current_price_yes,
                     "BUY_YES", confidence, settings, portfolio, city, target_date,
-                    vf=vf,
+                    vf=vf, is_latency=has_significant_shift,
                 )
                 if signal:
                     signals.append(signal)
@@ -233,6 +248,7 @@ def _forecast_signal(
     city: str,
     target_date: date,
     vf: "VerifiedForecast | None" = None,
+    is_latency: bool = False,
 ) -> Signal | None:
     """Generate a signal based on forecast probability.
 
@@ -260,6 +276,11 @@ def _forecast_signal(
     if edge <= 0 or effective_price >= MAX_PRICE or effective_price <= 0.01:
         return None
 
+    # Minimum edge threshold — lower for latency arbitrage signals
+    min_edge = settings.latency_arb_edge_threshold if is_latency else settings.min_edge_threshold
+    if edge < min_edge:
+        return None
+
     # Kelly sizing
     kelly_f = _kelly_fraction(true_prob, effective_price)
     if kelly_f <= 0:
@@ -277,7 +298,10 @@ def _forecast_signal(
     if position_size < min_usd:
         return None
 
-    tag = "FORECAST-YES" if side == "BUY_YES" else "CERTAINTY-NO"
+    if is_latency:
+        tag = "LATENCY-YES" if side == "BUY_YES" else "LATENCY-NO"
+    else:
+        tag = "FORECAST-YES" if side == "BUY_YES" else "FORECAST-NO"
 
     logger.info(
         "[%s] %s %s | %s %s | prob=%.0f%% price=%.0fc edge=%.1f%% $%.2f",

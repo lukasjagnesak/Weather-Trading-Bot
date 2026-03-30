@@ -345,11 +345,12 @@ async def fetch_all_cities(
     city_keys: list[str],
     target_dates: list[date] | None = None,
     models: list[str] | None = None,
+    force_refresh: bool = False,
 ) -> dict[tuple[str, date], list[EnsembleForecast]]:
     """Fetch ensemble forecasts for multiple cities and dates.
 
     Strategy (fail-fast, never block on retries):
-    1. Return fresh cache if available (< 6h old)
+    1. Return fresh cache if available (< 6h old) — skipped if force_refresh
     2. Try API once per model — no retries on 429
     3. If API fails, use stale cache (up to 12h)
     4. If no cache at all, build synthetic forecasts from deterministic API
@@ -369,10 +370,13 @@ async def fetch_all_cities(
         + "|" + ",".join(sorted(models))
     )
 
-    # 1. Return fresh cached result (< 6h old)
-    cached = _load_cache(cache_key, CACHE_TTL_MINUTES)
-    if cached is not None:
-        return cached
+    # 1. Return fresh cached result (< 6h old) — skip if force_refresh
+    if not force_refresh:
+        cached = _load_cache(cache_key, CACHE_TTL_MINUTES)
+        if cached is not None:
+            return cached
+    else:
+        logger.info("Force refresh: bypassing cache for fresh model data")
 
     # 2. Try ensemble API (one attempt per model, no retries)
     unit_groups: dict[str, list[str]] = {}
