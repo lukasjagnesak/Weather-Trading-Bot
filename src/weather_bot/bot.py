@@ -25,6 +25,37 @@ from .weather import fetch_all_cities
 logger = logging.getLogger(__name__)
 
 
+def _fetch_onchain_balance(settings: Settings) -> float | None:
+    """Fetch actual USDC collateral balance from Polymarket.
+
+    Returns the balance in USD, or None if unavailable (paper mode, no key, etc.)
+    """
+    if settings.trading_mode != "live" or not settings.polymarket_private_key:
+        return None
+
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import BalanceAllowanceParams
+
+        client = ClobClient(
+            settings.polymarket_clob_url,
+            key=settings.polymarket_private_key,
+            chain_id=137,
+            signature_type=settings.polymarket_signature_type,
+            funder=settings.polymarket_funder_address,
+        )
+        creds = client.create_or_derive_api_creds()
+        client.set_api_creds(creds)
+
+        params = BalanceAllowanceParams(asset_type="COLLATERAL")
+        bal = client.get_balance_allowance(params)
+        collateral = int(bal.get("balance", "0")) / 1_000_000
+        return collateral
+    except Exception as e:
+        logger.warning("Failed to fetch on-chain balance: %s", e)
+        return None
+
+
 async def run_scan(
     settings: Settings,
     portfolio: PortfolioState,
@@ -267,6 +298,21 @@ async def run_loop(settings: Settings, portfolio: PortfolioState) -> None:
                 logger.warning("Failed to send daily report: %s", e)
 
             last_report_date = today
+
+        # Sync bankroll with on-chain balance (live mode only)
+        try:
+            onchain = _fetch_onchain_balance(settings)
+            if onchain is not None:
+                old_bankroll = portfolio.bankroll
+                portfolio.bankroll = onchain
+                portfolio.peak_bankroll = max(portfolio.peak_bankroll, onchain)
+                if abs(onchain - old_bankroll) > 0.01:
+                    logger.info(
+                        "BANKROLL SYNC: $%.2f → $%.2f (on-chain USDC)",
+                        old_bankroll, onchain,
+                    )
+        except Exception as e:
+            logger.debug("Balance sync failed: %s", e)
 
         # Run scan
         try:
