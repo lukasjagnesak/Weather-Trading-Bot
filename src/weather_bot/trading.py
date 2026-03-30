@@ -366,8 +366,29 @@ def _certainty_signal(
     observed_high = observed_highs.get(city) if observed_highs else None
 
     if observed_high is not None:
-        # Use observed temperature — very tight spread since it's real data
-        sigma = 0.3  # tiny uncertainty — temperature is already measured
+        # ── BUY_NO safety: validate observed temp is far from bucket ──
+        # After 3 PM, temps can still rise 1-2° — need safety margin.
+        if side == "BUY_NO":
+            # Check: is observed temp dangerously close to this bucket?
+            distance = _distance_from_bucket(observed_high, outcome.bucket)
+            # Also check: is observed temp INSIDE the bucket? → never bet NO
+            in_bucket = _temp_in_bucket(observed_high, outcome.bucket)
+            if in_bucket:
+                logger.debug(
+                    "Certainty NO rejected: observed %.1f° is INSIDE bucket %s",
+                    observed_high, outcome.bucket.label,
+                )
+                return None
+            if distance < 2.0:
+                logger.debug(
+                    "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥2°)",
+                    observed_high, distance, outcome.bucket.label,
+                )
+                return None
+
+        # Use observed temperature with safety margin for spread
+        # After 3 PM temps can still shift ~1° → use sigma=1.0 not 0.3
+        sigma = 1.0
         true_prob = _gaussian_bucket_prob(observed_high, sigma, outcome.bucket)
         if side == "BUY_NO":
             true_prob = 1.0 - true_prob
@@ -398,6 +419,10 @@ def _certainty_signal(
     if true_prob < settings.certainty_min_model_prob:
         return None
     if effective_price >= settings.certainty_max_price or effective_price <= 0.01:
+        return None
+
+    # BUY_NO requires higher minimum price (75c) — only bet when very confident
+    if side == "BUY_NO" and effective_price < 0.75:
         return None
 
     # Fixed position size for certainty bets
