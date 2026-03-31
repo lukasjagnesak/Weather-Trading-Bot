@@ -285,7 +285,7 @@ class Settings(BaseSettings):
     certainty_max_price: float = 0.95        # never pay more than 95c (YES)
     certainty_max_price_no: float = 0.85     # never pay more than 85c for NO (need ≥15c profit margin)
     certainty_position_pct: float = 0.12     # 12% of bankroll per certainty bet — primary profit source
-    certainty_position_pct_no: float = 0.06  # 6% for NO bets — half size, higher risk
+    certainty_position_pct_no: float = 0.12  # same as YES — testing phase
 
     # Ensemble models to use
     ensemble_models: list[str] = Field(

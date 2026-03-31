@@ -211,14 +211,13 @@ def detect_signals(
             no_price = outcome.current_price_no
 
             # Bet NO when forecast clearly disagrees with market.
-            # NO price range 50-85c — cap at 85c to ensure ≥15c profit margin.
-            # Model must give ≤20% YES probability (i.e. ≥80% NO) — stricter
-            # than YES bets because NO has worse risk/reward (high cost, low payout).
-            if not (0.50 <= no_price <= settings.certainty_max_price_no):
+            # NO price range 70-85c — ensures ≥15c profit margin.
+            # Model must give ≤25% YES probability (i.e. ≥75% NO).
+            if not (0.70 <= no_price <= settings.certainty_max_price_no):
                 continue
             our_no_prob = 1.0 - model_prob
-            if our_no_prob < 0.80:
-                continue  # need ≥80% model confidence it's wrong
+            if our_no_prob < 0.75:
+                continue  # need ≥75% model confidence it's wrong
 
             # Edge BUY_NO disabled — too risky, main source of losses.
             # Only certainty BUY_NO (observed temps) is allowed.
@@ -432,7 +431,7 @@ def _certainty_signal(
                 effective_price * 100, settings.certainty_max_price_no * 100,
             )
             return None
-        if effective_price < 0.75:
+        if effective_price < 0.70:
             return None
 
     # Fixed position size for certainty bets — minimum $1
