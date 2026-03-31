@@ -425,10 +425,10 @@ def _certainty_signal(
     if side == "BUY_NO" and effective_price < 0.75:
         return None
 
-    # Fixed position size for certainty bets
-    position_size = settings.certainty_position_pct * portfolio.bankroll
+    # Fixed position size for certainty bets — minimum $1
+    position_size = max(settings.certainty_position_pct * portfolio.bankroll, 1.0)
 
-    if position_size < 1.0:
+    if position_size > portfolio.bankroll:
         return None
 
     edge = true_prob - effective_price

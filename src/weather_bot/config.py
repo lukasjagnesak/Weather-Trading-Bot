@@ -82,6 +82,31 @@ CITIES: dict[str, CityConfig] = {
         icao="KSEA", timezone="America/Los_Angeles",
         wunderground_url="https://www.wunderground.com/history/daily/us/seattle/KSEA",
     ),
+    "austin": CityConfig(
+        "Austin", 30.1945, -97.6699, unit="fahrenheit",
+        icao="KAUS", timezone="America/Chicago",
+        wunderground_url="https://www.wunderground.com/history/daily/us/austin/KAUS",
+    ),
+    "denver": CityConfig(
+        "Denver", 39.8561, -104.6737, unit="fahrenheit",
+        icao="KDEN", timezone="America/Denver",
+        wunderground_url="https://www.wunderground.com/history/daily/us/denver/KDEN",
+    ),
+    "houston": CityConfig(
+        "Houston", 29.6454, -95.2789, unit="fahrenheit",
+        icao="KIAH", timezone="America/Chicago",
+        wunderground_url="https://www.wunderground.com/history/daily/us/houston/KIAH",
+    ),
+    "los_angeles": CityConfig(
+        "Los Angeles", 33.9425, -118.4081, unit="fahrenheit",
+        icao="KLAX", timezone="America/Los_Angeles",
+        wunderground_url="https://www.wunderground.com/history/daily/us/los-angeles/KLAX",
+    ),
+    "san_francisco": CityConfig(
+        "San Francisco", 37.6213, -122.3790, unit="fahrenheit",
+        icao="KSFO", timezone="America/Los_Angeles",
+        wunderground_url="https://www.wunderground.com/history/daily/us/san-francisco/KSFO",
+    ),
     # --- Canada (Fahrenheit on Polymarket) ---------------------------------
     "toronto": CityConfig(
         "Toronto", 43.6777, -79.6248, unit="fahrenheit",
@@ -104,6 +129,36 @@ CITIES: dict[str, CityConfig] = {
         icao="LTAC", timezone="Europe/Istanbul",
         wunderground_url="https://www.wunderground.com/history/daily/tr/ankara/LTAC",
     ),
+    "istanbul": CityConfig(
+        "Istanbul", 40.9769, 28.8146, unit="celsius",
+        icao="LTFM", timezone="Europe/Istanbul",
+        wunderground_url="https://www.wunderground.com/history/daily/tr/istanbul/LTFM",
+    ),
+    "munich": CityConfig(
+        "Munich", 48.3537, 11.7750, unit="celsius",
+        icao="EDDM", timezone="Europe/Berlin",
+        wunderground_url="https://www.wunderground.com/history/daily/de/munich/EDDM",
+    ),
+    "milan": CityConfig(
+        "Milan", 45.6301, 8.7231, unit="celsius",
+        icao="LIMC", timezone="Europe/Rome",
+        wunderground_url="https://www.wunderground.com/history/daily/it/milan/LIMC",
+    ),
+    "madrid": CityConfig(
+        "Madrid", 40.4722, -3.5611, unit="celsius",
+        icao="LEMD", timezone="Europe/Madrid",
+        wunderground_url="https://www.wunderground.com/history/daily/es/madrid/LEMD",
+    ),
+    "warsaw": CityConfig(
+        "Warsaw", 52.1657, 20.9671, unit="celsius",
+        icao="EPWA", timezone="Europe/Warsaw",
+        wunderground_url="https://www.wunderground.com/history/daily/pl/warsaw/EPWA",
+    ),
+    "moscow": CityConfig(
+        "Moscow", 55.9726, 37.4146, unit="celsius",
+        icao="UUEE", timezone="Europe/Moscow",
+        wunderground_url="https://www.wunderground.com/history/daily/ru/moscow/UUEE",
+    ),
     # --- Asia (Celsius) ----------------------------------------------------
     "tokyo": CityConfig(
         "Tokyo", 35.5494, 139.7798, unit="celsius",
@@ -120,6 +175,41 @@ CITIES: dict[str, CityConfig] = {
         icao="ZSPD", timezone="Asia/Shanghai",
         wunderground_url="https://www.wunderground.com/history/daily/cn/shanghai/ZSPD",
     ),
+    "beijing": CityConfig(
+        "Beijing", 40.0799, 116.6031, unit="celsius",
+        icao="ZBAD", timezone="Asia/Shanghai",
+        wunderground_url="https://www.wunderground.com/history/daily/cn/beijing/ZBAD",
+    ),
+    "chongqing": CityConfig(
+        "Chongqing", 29.7192, 106.6414, unit="celsius",
+        icao="ZUCK", timezone="Asia/Shanghai",
+        wunderground_url="https://www.wunderground.com/history/daily/cn/chongqing/ZUCK",
+    ),
+    "wuhan": CityConfig(
+        "Wuhan", 30.7838, 114.2081, unit="celsius",
+        icao="ZHHH", timezone="Asia/Shanghai",
+        wunderground_url="https://www.wunderground.com/history/daily/cn/wuhan/ZHHH",
+    ),
+    "chengdu": CityConfig(
+        "Chengdu", 30.5785, 103.9471, unit="celsius",
+        icao="ZUUU", timezone="Asia/Shanghai",
+        wunderground_url="https://www.wunderground.com/history/daily/cn/chengdu/ZUUU",
+    ),
+    "shenzhen": CityConfig(
+        "Shenzhen", 22.6394, 113.8107, unit="celsius",
+        icao="ZGSZ", timezone="Asia/Shanghai",
+        wunderground_url="https://www.wunderground.com/history/daily/cn/shenzhen/ZGSZ",
+    ),
+    "hong_kong": CityConfig(
+        "Hong Kong", 22.3080, 113.9185, unit="celsius",
+        icao="VHHH", timezone="Asia/Hong_Kong",
+        wunderground_url="https://www.wunderground.com/history/daily/hk/hong-kong/VHHH",
+    ),
+    "singapore": CityConfig(
+        "Singapore", 1.3502, 103.9940, unit="celsius",
+        icao="WSSS", timezone="Asia/Singapore",
+        wunderground_url="https://www.wunderground.com/history/daily/sg/singapore/WSSS",
+    ),
     "taipei": CityConfig(
         "Taipei", 25.0777, 121.2325, unit="celsius",
         icao="RCTP", timezone="Asia/Taipei",
@@ -129,6 +219,27 @@ CITIES: dict[str, CityConfig] = {
         "Lucknow", 26.7606, 80.8893, unit="celsius",
         icao="VILK", timezone="Asia/Kolkata",
         wunderground_url="https://www.wunderground.com/history/daily/in/lucknow/VILK",
+    ),
+    "tel_aviv": CityConfig(
+        "Tel Aviv", 32.0055, 34.8854, unit="celsius",
+        icao="LLBG", timezone="Asia/Jerusalem",
+        wunderground_url="https://www.wunderground.com/history/daily/il/tel-aviv/LLBG",
+    ),
+    # --- Americas (Celsius) ------------------------------------------------
+    "mexico_city": CityConfig(
+        "Mexico City", 19.4361, -99.0719, unit="celsius",
+        icao="MMMX", timezone="America/Mexico_City",
+        wunderground_url="https://www.wunderground.com/history/daily/mx/mexico-city/MMMX",
+    ),
+    "sao_paulo": CityConfig(
+        "Sao Paulo", -23.6273, -46.6566, unit="celsius",
+        icao="SBGR", timezone="America/Sao_Paulo",
+        wunderground_url="https://www.wunderground.com/history/daily/br/sao-paulo/SBGR",
+    ),
+    "buenos_aires": CityConfig(
+        "Buenos Aires", -34.5592, -58.4156, unit="celsius",
+        icao="SAEZ", timezone="America/Argentina/Buenos_Aires",
+        wunderground_url="https://www.wunderground.com/history/daily/ar/buenos-aires/SAEZ",
     ),
     # --- Oceania (Celsius) -------------------------------------------------
     "sydney": CityConfig(
@@ -200,9 +311,9 @@ class Settings(BaseSettings):
     latency_arb_min_shift: float = 1.0  # minimum forecast shift (°C/°F) to trigger
     latency_arb_edge_threshold: float = 0.05  # lower edge threshold (5%) for latency signals
 
-    # Cities to trade (keys from CITIES dict)
+    # Cities to trade — all Polymarket temperature markets
     active_cities: list[str] = Field(
-        default=["nyc", "london", "paris", "tokyo", "seoul", "shanghai"]
+        default_factory=lambda: list(CITIES.keys())
     )
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

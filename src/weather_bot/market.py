@@ -108,23 +108,51 @@ def _extract_city_key(event_title: str) -> str | None:
     title_lower = event_title.lower()
 
     city_aliases = {
+        # US cities
         "nyc": "nyc", "new york": "nyc", "laguardia": "nyc",
-        "london": "london", "london city": "london", "heathrow": "london",
-        "paris": "paris", "cdg": "paris", "charles de gaulle": "paris",
-        "tokyo": "tokyo", "haneda": "tokyo", "narita": "tokyo",
-        "seoul": "seoul", "incheon": "seoul",
-        "shanghai": "shanghai", "pudong": "shanghai",
-        "ankara": "ankara", "esenboga": "ankara",
-        "toronto": "toronto", "pearson": "toronto",
         "chicago": "chicago", "o'hare": "chicago",
         "dallas": "dallas", "love field": "dallas",
         "atlanta": "atlanta",
         "miami": "miami",
         "seattle": "seattle",
-        "sydney": "sydney",
-        "wellington": "wellington",
+        "austin": "austin",
+        "denver": "denver",
+        "houston": "houston",
+        "los angeles": "los_angeles", "lax": "los_angeles",
+        "san francisco": "san_francisco", "sfo": "san_francisco",
+        # Canada
+        "toronto": "toronto", "pearson": "toronto",
+        # Europe
+        "london": "london", "london city": "london", "heathrow": "london",
+        "paris": "paris", "cdg": "paris", "charles de gaulle": "paris",
+        "ankara": "ankara", "esenboga": "ankara",
+        "istanbul": "istanbul",
+        "munich": "munich",
+        "milan": "milan",
+        "madrid": "madrid",
+        "warsaw": "warsaw",
+        "moscow": "moscow",
+        # Asia
+        "tokyo": "tokyo", "haneda": "tokyo", "narita": "tokyo",
+        "seoul": "seoul", "incheon": "seoul",
+        "shanghai": "shanghai", "pudong": "shanghai",
+        "beijing": "beijing",
+        "chongqing": "chongqing",
+        "wuhan": "wuhan",
+        "chengdu": "chengdu",
+        "shenzhen": "shenzhen",
+        "hong kong": "hong_kong",
+        "singapore": "singapore",
         "taipei": "taipei", "taoyuan": "taipei",
         "lucknow": "lucknow",
+        "tel aviv": "tel_aviv",
+        # Americas
+        "mexico city": "mexico_city",
+        "sao paulo": "sao_paulo", "são paulo": "sao_paulo",
+        "buenos aires": "buenos_aires",
+        # Oceania
+        "sydney": "sydney",
+        "wellington": "wellington",
     }
 
     for alias, key in city_aliases.items():
