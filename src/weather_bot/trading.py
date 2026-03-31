@@ -211,13 +211,14 @@ def detect_signals(
             no_price = outcome.current_price_no
 
             # Bet NO when forecast clearly disagrees with market.
-            # NO price range 50-95c (market thinks 50-95% NO, we think more)
-            # Model must give ≤30% YES probability (i.e. ≥70% NO)
-            if not (0.50 <= no_price <= 0.95):
+            # NO price range 50-85c — cap at 85c to ensure ≥15c profit margin.
+            # Model must give ≤20% YES probability (i.e. ≥80% NO) — stricter
+            # than YES bets because NO has worse risk/reward (high cost, low payout).
+            if not (0.50 <= no_price <= settings.certainty_max_price_no):
                 continue
             our_no_prob = 1.0 - model_prob
-            if our_no_prob < 0.70:
-                continue  # need ≥70% model confidence it's wrong
+            if our_no_prob < 0.80:
+                continue  # need ≥80% model confidence it's wrong
 
             # Edge BUY_NO disabled — too risky, main source of losses.
             # Only certainty BUY_NO (observed temps) is allowed.
@@ -379,9 +380,9 @@ def _certainty_signal(
                     observed_high, outcome.bucket.label,
                 )
                 return None
-            if distance < 2.0:
+            if distance < 3.0:
                 logger.debug(
-                    "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥2°)",
+                    "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥3°)",
                     observed_high, distance, outcome.bucket.label,
                 )
                 return None
@@ -421,12 +422,23 @@ def _certainty_signal(
     if effective_price >= settings.certainty_max_price or effective_price <= 0.01:
         return None
 
-    # BUY_NO requires higher minimum price (75c) — only bet when very confident
-    if side == "BUY_NO" and effective_price < 0.75:
-        return None
+    # BUY_NO: cap price at 85c (not 95c) — at higher prices the risk/reward
+    # is terrible (e.g. 90c → risk 90c to win 10c = 9:1 against you).
+    # Minimum 15c profit margin ensures reasonable payoff.
+    if side == "BUY_NO":
+        if effective_price > settings.certainty_max_price_no:
+            logger.debug(
+                "Certainty NO rejected: price %.0fc too high (max %.0fc for NO)",
+                effective_price * 100, settings.certainty_max_price_no * 100,
+            )
+            return None
+        if effective_price < 0.75:
+            return None
 
     # Fixed position size for certainty bets — minimum $1
-    position_size = max(settings.certainty_position_pct * portfolio.bankroll, 1.0)
+    # NO bets use smaller size (higher risk per trade)
+    pct = settings.certainty_position_pct_no if side == "BUY_NO" else settings.certainty_position_pct
+    position_size = max(pct * portfolio.bankroll, 1.0)
 
     if position_size > portfolio.bankroll:
         return None

@@ -282,8 +282,10 @@ class Settings(BaseSettings):
     # e.g. model says 90% → buy YES at 70c, collect 30c profit per share.
     certainty_enabled: bool = True
     certainty_min_model_prob: float = 0.70   # model must give ≥70% probability
-    certainty_max_price: float = 0.95        # never pay more than 95c
+    certainty_max_price: float = 0.95        # never pay more than 95c (YES)
+    certainty_max_price_no: float = 0.85     # never pay more than 85c for NO (need ≥15c profit margin)
     certainty_position_pct: float = 0.12     # 12% of bankroll per certainty bet — primary profit source
+    certainty_position_pct_no: float = 0.06  # 6% for NO bets — half size, higher risk
 
     # Ensemble models to use
     ensemble_models: list[str] = Field(
