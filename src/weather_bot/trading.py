@@ -361,57 +361,42 @@ def _certainty_signal(
         if local_now.hour < settings.certainty_min_hour:
             return None
 
-    # Use observed high if available (real-time data, not forecast)
+    # Certainty strategy REQUIRES observed high — never bet on forecast alone.
+    # Without real temperature data, certainty is just guessing.
     observed_high = observed_highs.get(city) if observed_highs else None
+    if observed_high is None:
+        logger.debug("Certainty skipped for %s/%s: no observed high available", city, target_date)
+        return None
 
-    if observed_high is not None:
-        # ── BUY_NO safety: validate observed temp is far from bucket ──
-        # After 3 PM, temps can still rise 1-2° — need safety margin.
-        if side == "BUY_NO":
-            # Check: is observed temp dangerously close to this bucket?
-            distance = _distance_from_bucket(observed_high, outcome.bucket)
-            # Also check: is observed temp INSIDE the bucket? → never bet NO
-            in_bucket = _temp_in_bucket(observed_high, outcome.bucket)
-            if in_bucket:
-                logger.debug(
-                    "Certainty NO rejected: observed %.1f° is INSIDE bucket %s",
-                    observed_high, outcome.bucket.label,
-                )
-                return None
-            if distance < 3.0:
-                logger.debug(
-                    "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥3°)",
-                    observed_high, distance, outcome.bucket.label,
-                )
-                return None
+    # ── BUY_NO safety: validate observed temp is far from bucket ──
+    # After 3 PM, temps can still rise 1-2° — need safety margin.
+    if side == "BUY_NO":
+        distance = _distance_from_bucket(observed_high, outcome.bucket)
+        in_bucket = _temp_in_bucket(observed_high, outcome.bucket)
+        if in_bucket:
+            logger.debug(
+                "Certainty NO rejected: observed %.1f° is INSIDE bucket %s",
+                observed_high, outcome.bucket.label,
+            )
+            return None
+        if distance < 3.0:
+            logger.debug(
+                "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥3°)",
+                observed_high, distance, outcome.bucket.label,
+            )
+            return None
 
-        # After 3 PM daily high is nearly locked — use tight sigma
-        sigma = 1.0
-        true_prob = _gaussian_bucket_prob(observed_high, sigma, outcome.bucket)
-        if side == "BUY_NO":
-            true_prob = 1.0 - true_prob
-        effective_price = token_price
+    # After 3 PM daily high is nearly locked — use tight sigma
+    sigma = 1.0
+    true_prob = _gaussian_bucket_prob(observed_high, sigma, outcome.bucket)
+    if side == "BUY_NO":
+        true_prob = 1.0 - true_prob
+    effective_price = token_price
 
-        logger.debug(
-            "Certainty using observed high %.1f° for %s/%s bucket %s → prob=%.0f%%",
-            observed_high, city, target_date, outcome.bucket.label, true_prob * 100,
-        )
-    else:
-        # Fall back to verification/model data
-        if side == "BUY_YES":
-            if vf is not None:
-                sigma = max(vf.spread, 1.5)
-                true_prob = _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
-            else:
-                true_prob = model_prob
-            effective_price = token_price
-        else:  # BUY_NO
-            if vf is not None:
-                sigma = max(vf.spread, 1.5)
-                true_prob = 1.0 - _gaussian_bucket_prob(vf.mean_high, sigma, outcome.bucket)
-            else:
-                true_prob = 1.0 - model_prob
-            effective_price = token_price
+    logger.debug(
+        "Certainty using observed high %.1f° for %s/%s bucket %s → prob=%.0f%%",
+        observed_high, city, target_date, outcome.bucket.label, true_prob * 100,
+    )
 
     # Only trade if model is confident enough and price is below cap
     if true_prob < settings.certainty_min_model_prob:
