@@ -286,6 +286,8 @@ class Settings(BaseSettings):
     certainty_max_price_no: float = 0.85     # never pay more than 85c for NO (need ≥15c profit margin)
     certainty_position_pct: float = 0.12     # 12% of bankroll per certainty bet — primary profit source
     certainty_position_pct_no: float = 0.12  # same as YES — testing phase
+    certainty_min_hour_yes: int = 11         # BUY_YES allowed from 11:00 local time
+    certainty_min_hour_no: int = 14          # BUY_NO allowed from 14:00 local time (needs more certainty)
 
     # Ensemble models to use
     ensemble_models: list[str] = Field(
