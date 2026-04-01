@@ -353,14 +353,12 @@ def _certainty_signal(
     if target_date != today:
         return None
 
-    # Check local time — BUY_YES can start earlier (observed high is already
-    # useful by late morning), BUY_NO needs more certainty (later in the day).
+    # Certainty bets only after 15:00 local time — daily high is locked in.
     city_cfg = CITIES.get(city)
     if city_cfg:
         from zoneinfo import ZoneInfo
         local_now = datetime.now(ZoneInfo(city_cfg.timezone))
-        min_hour = settings.certainty_min_hour_no if side == "BUY_NO" else settings.certainty_min_hour_yes
-        if local_now.hour < min_hour:
+        if local_now.hour < settings.certainty_min_hour:
             return None
 
     # Use observed high if available (real-time data, not forecast)
@@ -387,14 +385,8 @@ def _certainty_signal(
                 )
                 return None
 
-        # Use observed temperature with safety margin for spread.
-        # Earlier in the day → temps can still rise more → wider sigma.
-        if local_now.hour >= 15:
-            sigma = 1.0   # after 3 PM, daily high nearly locked
-        elif local_now.hour >= 13:
-            sigma = 1.5   # early afternoon, some uncertainty
-        else:
-            sigma = 2.0   # late morning, more uncertainty
+        # After 3 PM daily high is nearly locked — use tight sigma
+        sigma = 1.0
         true_prob = _gaussian_bucket_prob(observed_high, sigma, outcome.bucket)
         if side == "BUY_NO":
             true_prob = 1.0 - true_prob
