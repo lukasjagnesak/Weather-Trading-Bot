@@ -422,10 +422,21 @@ def _certainty_signal(
     pct = settings.certainty_position_pct_no if side == "BUY_NO" else settings.certainty_position_pct
     position_size = max(pct * portfolio.bankroll, 1.0)
 
+    # Polymarket minimum is 5 shares — ensure we meet it
+    exec_price = outcome.best_ask if side == "BUY_YES" else outcome.current_price_no
+    min_usd = max(5.0 * exec_price, 1.0)
+    if position_size < min_usd:
+        position_size = min_usd  # bump up to minimum
+
     if position_size > portfolio.bankroll:
         return None
 
     edge = true_prob - effective_price
+    if edge <= 0:
+        logger.debug("Certainty rejected: negative edge %.1f%% for %s/%s %s",
+                      edge * 100, city, target_date, outcome.bucket.label)
+        return None
+
     profit_margin = 1.0 - effective_price
 
     src = "observed" if observed_high is not None else "forecast"
