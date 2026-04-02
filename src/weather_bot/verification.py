@@ -338,10 +338,10 @@ async def fetch_current_observed_high(
 ) -> float | None:
     """Fetch today's observed maximum temperature so far (real-time).
 
-    Uses Open-Meteo hourly data up to the current hour to determine
-    the highest temperature recorded today.  This is the key input
-    for certainty bets: after ~3 PM local time the daily high is
-    essentially known.
+    Uses multiple sources in priority order:
+    1. Weather Underground (actual resolution source for Polymarket)
+    2. Open-Meteo current weather API (real station observations)
+    3. Open-Meteo forecast with past_hours (model reanalysis, least accurate)
 
     Returns the observed high in the city's native unit, or None.
     """
@@ -349,11 +349,24 @@ async def fetch_current_observed_high(
     if not city:
         return None
 
-    temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
     today = date.today()
 
     async with httpx.AsyncClient(timeout=20.0) as client:
+        # Source 1: Weather Underground — the ACTUAL resolution source
         try:
+            wu_high = await _fetch_wunderground_high(city_key, today, client)
+            if wu_high is not None:
+                logger.info(
+                    "Observed high for %s from WU: %.1f°%s",
+                    city_key, wu_high, "F" if city.unit == "fahrenheit" else "C",
+                )
+                return wu_high
+        except Exception as e:
+            logger.debug("WU current high failed for %s: %s", city_key, e)
+
+        # Source 2: Open-Meteo current weather (real station data, not forecast)
+        try:
+            temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
             resp = await client.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
@@ -369,39 +382,33 @@ async def fetch_current_observed_high(
             )
             resp.raise_for_status()
             data = resp.json()
-        except (httpx.HTTPError, ValueError) as e:
-            logger.debug("Failed to fetch current observed high for %s: %s", city_key, e)
-            return None
 
-    hourly = data.get("hourly", {})
-    times = hourly.get("time", [])
-    temps = hourly.get("temperature_2m", [])
+            hourly = data.get("hourly", {})
+            times = hourly.get("time", [])
+            temps = hourly.get("temperature_2m", [])
 
-    if not times or not temps:
-        return None
+            if times and temps:
+                from zoneinfo import ZoneInfo
+                local_now = datetime.now(ZoneInfo(city.timezone))
+                current_hour_str = local_now.strftime("%Y-%m-%dT%H:00")
 
-    # Find the current hour in local time and get max temp up to now
-    from datetime import timezone as tz
-    from zoneinfo import ZoneInfo
+                observed_temps = []
+                for t, temp in zip(times, temps):
+                    if temp is not None and t <= current_hour_str:
+                        observed_temps.append(temp)
 
-    local_now = datetime.now(ZoneInfo(city.timezone))
-    current_hour_str = local_now.strftime("%Y-%m-%dT%H:00")
+                if observed_temps:
+                    high = max(observed_temps)
+                    logger.info(
+                        "Observed high for %s from Open-Meteo (fallback): %.1f°%s (up to %s local)",
+                        city_key, high, "F" if city.unit == "fahrenheit" else "C",
+                        local_now.strftime("%H:%M"),
+                    )
+                    return high
+        except Exception as e:
+            logger.debug("Open-Meteo current high failed for %s: %s", city_key, e)
 
-    observed_temps = []
-    for t, temp in zip(times, temps):
-        if temp is not None and t <= current_hour_str:
-            observed_temps.append(temp)
-
-    if not observed_temps:
-        return None
-
-    high = max(observed_temps)
-    logger.info(
-        "Current observed high for %s: %.1f°%s (up to %s local)",
-        city_key, high, "F" if city.unit == "fahrenheit" else "C",
-        local_now.strftime("%H:%M"),
-    )
-    return high
+    return None
 
 
 async def _fetch_wunderground_high(
