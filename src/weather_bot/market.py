@@ -291,9 +291,46 @@ async def fetch_active_temperature_markets(
                         outcome_prices = ["0.5", "0.5"]
                 else:
                     outcome_prices = raw_prices
+                # ── CRITICAL: determine YES/NO index from outcomes field ──
+                # The API may return outcomes in any order: ["Yes","No"] or
+                # ["No","Yes"].  We MUST read the `outcomes` field to know
+                # which index is YES and which is NO.  Getting this wrong
+                # causes the bot to buy the WRONG token!
+                raw_outcomes = market.get("outcomes", [])
+                if isinstance(raw_outcomes, str):
+                    import json as _json
+                    try:
+                        outcomes_list = _json.loads(raw_outcomes)
+                    except (ValueError, TypeError):
+                        outcomes_list = ["Yes", "No"]
+                else:
+                    outcomes_list = raw_outcomes
+                if not outcomes_list or len(outcomes_list) < 2:
+                    outcomes_list = ["Yes", "No"]
+
+                # Find YES and NO indices
+                yes_idx = 0
+                no_idx = 1
+                for i, o in enumerate(outcomes_list):
+                    if str(o).strip().lower() == "yes":
+                        yes_idx = i
+                    elif str(o).strip().lower() == "no":
+                        no_idx = i
+
+                if yes_idx == no_idx:
+                    logger.warning("Could not determine YES/NO indices for %s, skipping", question[:60])
+                    continue
+
+                # Log when outcomes are in non-standard order
+                if yes_idx != 0:
+                    logger.info(
+                        "NON-STANDARD outcome order for %s: outcomes=%s → yes_idx=%d, no_idx=%d",
+                        question[:60], outcomes_list, yes_idx, no_idx,
+                    )
+
                 try:
-                    price_yes = float(outcome_prices[0]) if outcome_prices else 0.5
-                    price_no = float(outcome_prices[1]) if len(outcome_prices) > 1 else 1 - price_yes
+                    price_yes = float(outcome_prices[yes_idx]) if outcome_prices else 0.5
+                    price_no = float(outcome_prices[no_idx]) if len(outcome_prices) > no_idx else 1 - price_yes
                 except (ValueError, IndexError):
                     price_yes = 0.5
                     price_no = 0.5
@@ -302,8 +339,8 @@ async def fetch_active_temperature_markets(
                     market_id=str(market.get("id", "")),
                     condition_id=market.get("conditionId", ""),
                     question=question,
-                    token_id_yes=clob_token_ids[0],
-                    token_id_no=clob_token_ids[1],
+                    token_id_yes=clob_token_ids[yes_idx],
+                    token_id_no=clob_token_ids[no_idx],
                     bucket=bucket,
                     current_price_yes=price_yes,
                     current_price_no=price_no,
