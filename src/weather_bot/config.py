@@ -277,16 +277,37 @@ class Settings(BaseSettings):
     max_drawdown_pct: float = 0.15  # reduce size at 15% drawdown
 
     # High-confidence "certainty" strategy
-    # Buy YES/NO even if market is already well-priced, as long as our model
-    # is confident enough and the price is below the maximum cap.
-    # e.g. model says 90% → buy YES at 70c, collect 30c profit per share.
+    # Uses real-time observed temperature (WU) after 16:00 local time.
+    # BUY_YES on bucket where observed temp IS, BUY_NO on distant buckets.
     certainty_enabled: bool = True
-    certainty_min_model_prob: float = 0.70   # model must give ≥70% probability
-    certainty_max_price: float = 0.95        # never pay more than 95c (YES)
-    certainty_max_price_no: float = 0.85     # never pay more than 85c for NO (need ≥15c profit margin)
-    certainty_position_pct: float = 0.12     # 12% of bankroll per certainty bet — primary profit source
-    certainty_position_pct_no: float = 0.12  # same as YES — testing phase
-    certainty_min_hour: int = 15             # certainty bets only after 15:00 local time
+    certainty_min_hour: int = 16              # bets only after 16:00 local time
+
+    # YES pricing: buy at 50-82c (18c+ profit margin)
+    certainty_max_price: float = 0.82         # never pay more than 82c for YES
+    certainty_min_price_yes: float = 0.50     # don't buy YES below 50c (suspicious)
+
+    # NO pricing: buy at 50-75c (25c+ profit margin, better risk/reward)
+    certainty_max_price_no: float = 0.75      # never pay more than 75c for NO
+    certainty_min_price_no: float = 0.50      # don't buy NO below 50c
+
+    # Position sizing — higher stakes for near-certain bets
+    certainty_position_pct: float = 0.15      # 15% bankroll per YES bet
+    certainty_position_pct_no: float = 0.10   # 10% bankroll per NO bet
+
+    # Fee accounting
+    certainty_fee_rate: float = 0.0125        # 1.25% Polymarket taker fee
+    certainty_min_edge_after_fees: float = 0.05  # 5% minimum edge after fees
+
+    # Bucket edge margins — how far from bucket boundary the temp must be
+    certainty_bucket_margin_f: float = 1.0    # °F from bucket edge for YES
+    certainty_bucket_margin_c: float = 0.5    # °C from bucket edge for YES
+    certainty_tail_margin_f: float = 2.0      # °F from tail bucket edge
+    certainty_tail_margin_c: float = 1.0      # °C from tail bucket edge
+
+    # BUY_NO distance requirements
+    certainty_no_min_distance_f: float = 5.0  # min °F from observed to NO bucket
+    certainty_no_min_distance_c: float = 3.0  # min °C from observed to NO bucket
+    certainty_no_min_buckets: int = 3         # min bucket count distance for NO
 
     # Ensemble models to use
     ensemble_models: list[str] = Field(

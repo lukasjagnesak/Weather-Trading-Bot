@@ -140,8 +140,8 @@ def apply_risk_controls(
     signals = filter_correlated_signals(signals)
     signals = adjust_for_drawdown(signals, portfolio, settings)
 
-    # Cap total new exposure at 50% of bankroll (daily budget)
-    max_total_exposure = portfolio.bankroll * 0.50
+    # Cap total new exposure at 40% of bankroll (daily budget)
+    max_total_exposure = portfolio.bankroll * 0.40
     total_exposure = 0.0
     capped: list[Signal] = []
 
