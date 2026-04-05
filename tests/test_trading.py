@@ -53,21 +53,20 @@ class TestDetectSignals:
             target_date=target_date,
         )
 
-    def test_detects_mispriced_market(self):
-        """Should detect a signal when model probability differs from market price."""
+    def test_detects_certainty_signal_with_observed_high(self):
+        """Should detect a certainty YES signal when observed high is in bucket."""
         today = date.today()
         settings = Settings()
-        settings.min_edge_threshold = 0.05
+        settings.certainty_min_hour = 0  # allow any hour for testing
         portfolio = PortfolioState(bankroll=1000.0, peak_bankroll=1000.0)
 
-        # Market priced at 20% but model says 40%
+        # Market priced at 20% but observed temp is in this bucket
         outcomes = [
             self._make_outcome("nyc", today, "58-59", 58.0, 60.0, 0.20),
             self._make_outcome("nyc", today, "60-61", 60.0, 62.0, 0.30),
             self._make_outcome("nyc", today, "≥62", 62.0, float("inf"), 0.50),
         ]
 
-        # Two agreeing ensembles centered at 58.8 → clearly in [58,60) bucket
         forecasts = {
             ("nyc", today): [
                 EnsembleForecast(
@@ -87,21 +86,21 @@ class TestDetectSignals:
             ]
         }
 
-        signals = detect_signals(outcomes, forecasts, settings, portfolio)
-        # Should find at least one signal
+        # Observed high at 58.5 → inside 58-59 bucket
+        observed = {"nyc": 58.5}
+        signals = detect_signals(outcomes, forecasts, settings, portfolio,
+                                 observed_highs=observed)
         assert len(signals) > 0
-        # The 58-59 bucket should be flagged (model says ~high, market says 20%)
-        bucket_labels = [s.outcome.bucket.label for s in signals]
-        assert "58-59" in bucket_labels
+        assert signals[0].side == "BUY_YES"
+        assert signals[0].outcome.bucket.label == "58-59"
 
-    def test_forecast_strategy_picks_best_bucket(self):
-        """Should BUY_YES on the most probable bucket (edge only on D+0 with agreeing models)."""
+    def test_certainty_picks_observed_bucket(self):
+        """Should BUY_YES on the bucket where observed temp falls."""
         today = date.today()
         settings = Settings()
-        settings.max_position_pct = 0.10
+        settings.certainty_min_hour = 0  # allow any hour for testing
         portfolio = PortfolioState(bankroll=1000.0, peak_bankroll=1000.0)
 
-        # Mean=59, tight spread=1.5 → 58-59 bucket is most probable
         import numpy as np
         np.random.seed(42)
         members_gfs = list(np.random.normal(59, 1.5, 31))
@@ -135,12 +134,10 @@ class TestDetectSignals:
             ]
         }
 
-        signals = detect_signals(outcomes, forecasts, settings, portfolio)
-        # Best bucket (58-59) should be BUY_YES
+        # Observed temp at 59.0 → inside 58-59 bucket
+        observed = {"nyc": 59.0}
+        signals = detect_signals(outcomes, forecasts, settings, portfolio,
+                                 observed_highs=observed)
         yes_signals = [s for s in signals if s.side == "BUY_YES"]
         assert len(yes_signals) == 1
         assert yes_signals[0].outcome.bucket.label == "58-59"
-        # Edge BUY_NO is disabled — only certainty BUY_NO allowed
-        no_signals = [s for s in signals if s.side == "BUY_NO"]
-        for s in no_signals:
-            assert s.confidence > 0  # only certainty signals

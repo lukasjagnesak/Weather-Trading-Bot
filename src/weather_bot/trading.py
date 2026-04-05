@@ -69,15 +69,14 @@ def detect_signals(
 ) -> list[Signal]:
     """Scan all market outcomes and generate trading signals.
 
-    Forecast-first strategy:
-    1. Determine the most probable temperature bucket per city/date
-    2. BUY_YES on that bucket (only if YES token is cheap = high upside)
-    3. BUY_NO on buckets the forecast says are wrong (NO price 50-95c, model ≥70% NO)
+    ONLY certainty strategy is active — edge strategy is disabled because
+    forecast-based bets have consistently lost money (buying YES at 2-6c,
+    buying wrong-side tokens, etc.)
 
     Certainty strategy (today only, after 3 PM local):
-    4. Use real-time observed high to bet on known outcomes
-
-    Both YES and NO bets are driven by the verified multi-source forecast.
+    - Uses real-time OBSERVED high temperature (from WU, not forecast)
+    - BUY_YES on the bucket where the observed temp falls
+    - BUY_NO on buckets far from the observed temp (≥5° away)
     """
     signals: list[Signal] = []
 
@@ -90,149 +89,64 @@ def detect_signals(
     today = date.today()
 
     for (city, target_date), city_outcomes in grouped.items():
-        forecast_key = (city, target_date)
-        forecast_list = forecasts_by_key.get(forecast_key)
-        if not forecast_list:
-            logger.debug("No forecasts for %s/%s, skipping", city, target_date)
+        # ── CERTAINTY ONLY: skip if not today ──
+        if target_date != today:
             continue
 
-        # Log ensemble forecast details per model so we can verify correctness
-        for fc in forecast_list:
-            logger.info(
-                "FORECAST %s %s/%s: model=%s members=%d predicted_daily_high=%.1f spread=%.1f range=[%.1f..%.1f]",
-                fc.unit, city, target_date, fc.model_name,
-                len(fc.members), np.mean(fc.members), np.std(fc.members),
-                np.min(fc.members), np.max(fc.members),
-            )
+        if not settings.certainty_enabled:
+            continue
 
-        # Skip edge trading on deterministic fallback — synthetic ensembles
-        # have fake spread that doesn't reflect real forecast uncertainty.
-        # Only certainty strategy (with observed temps) is allowed on fallback.
-        is_deterministic = any(
-            fc.model_name == "deterministic_fallback" for fc in forecast_list
+        # Check if it's past the minimum hour in local time
+        city_cfg = CITIES.get(city)
+        if city_cfg:
+            from zoneinfo import ZoneInfo
+            local_now = datetime.now(ZoneInfo(city_cfg.timezone))
+            if local_now.hour < settings.certainty_min_hour:
+                continue
+
+        # REQUIRE observed high — no forecast-based bets
+        observed_high = observed_highs.get(city) if observed_highs else None
+        if observed_high is None:
+            logger.debug("Certainty skipped for %s: no observed high", city)
+            continue
+
+        logger.info(
+            "CERTAINTY scan %s/%s: observed_high=%.1f°",
+            city, target_date, observed_high,
         )
 
-        # ── RISK GUARD: Edge only on D+0 ─────────────────────────
-        # D+1 forecast error is too high — edge strategy only trades today.
-        is_today = (target_date == today)
-
-        # ── RISK GUARD: Require model agreement for edge ─────────
-        # Only allow edge bets when all ensemble models agree (spread < 2°).
-        model_means = [float(np.mean(fc.members)) for fc in forecast_list]
-        model_spread = max(model_means) - min(model_means) if len(model_means) > 1 else 0.0
-        models_agree = model_spread < 2.0
-        if not models_agree:
-            logger.info(
-                "Models disagree for %s/%s: spread=%.1f° (%.1f vs %.1f) — skipping edge",
-                city, target_date, model_spread, min(model_means), max(model_means),
-            )
-
-        # Edge trading allowed only when: today + not deterministic + models agree
-        edge_allowed = is_today and not is_deterministic and models_agree
-
-        # ── LATENCY ARBITRAGE: detect forecast shifts ─────────
-        # When a new model run shifts the forecast, markets haven't adjusted yet.
-        # Use lower edge threshold and allow D+1 for shifted forecasts.
-        shift = forecast_shifts.get((city, target_date), 0.0) if forecast_shifts else 0.0
-        has_significant_shift = abs(shift) >= settings.latency_arb_min_shift
-        if has_significant_shift:
-            logger.info(
-                "LATENCY ARB %s/%s: forecast shifted %+.1f° — using lower edge threshold (%.0f%%)",
-                city, target_date, shift, settings.latency_arb_edge_threshold * 100,
-            )
-            # Allow edge trading even on D+1 if there's a significant shift
-            if not is_deterministic and models_agree:
-                edge_allowed = True
-
-        # Compute probabilities for all buckets at once
-        buckets = [o.bucket for o in city_outcomes]
-        model_probs = compute_bucket_probabilities(forecast_list, buckets)
-        confidence = ensemble_confidence(forecast_list)
-
-        # Get verification data for this city/date
-        vf = verified.get(forecast_key) if verified else None
-        has_verification = vf is not None and vf.source_count >= 2
-
-        if has_verification:
-            if vf.source_count >= 3:
-                confidence = 0.5 * confidence + 0.5 * vf.agreement_score
-            logger.info(
-                "Verified forecast for %s/%s: %.1f° (%d sources, spread=%.1f, agreement=%.0f%%)",
-                city, target_date, vf.mean_high, vf.source_count,
-                vf.spread, vf.agreement_score * 100,
-            )
-
-        # ── Find the BEST bucket (highest model probability) ──────────
-        best_outcome = None
-        best_prob = 0.0
+        # ── Find which bucket the observed temp falls into → BUY_YES ──
         for outcome in city_outcomes:
-            p = model_probs.get(outcome.bucket.label, 0.0)
-            if p > best_prob:
-                best_prob = p
-                best_outcome = outcome
-
-        if best_outcome and best_prob > 0.20:
-            # BUY_YES on the most probable bucket — the core bet
-            signal = None
-            if edge_allowed:
-                signal = _forecast_signal(
-                    best_outcome, best_prob, best_outcome.current_price_yes,
-                    "BUY_YES", confidence, settings, portfolio, city, target_date,
-                    vf=vf, is_latency=has_significant_shift,
-                )
-                if signal:
-                    signals.append(signal)
-            else:
-                logger.debug("Skipping edge BUY_YES for %s/%s: %s",
-                             city, target_date,
-                             "D+1" if not is_today else
-                             "deterministic" if is_deterministic else "models disagree")
-
-            # Certainty strategy runs independently (not as fallback)
-            if settings.certainty_enabled:
+            if _temp_in_bucket(observed_high, outcome.bucket):
+                # Observed temp IS in this bucket → BUY_YES
                 cert = _certainty_signal(
-                    best_outcome, best_prob, best_outcome.current_price_yes,
-                    "BUY_YES", confidence, settings, portfolio, city, target_date,
-                    vf=vf, observed_highs=observed_highs,
+                    outcome, 0.0, outcome.current_price_yes,
+                    "BUY_YES", 1.0, settings, portfolio, city, target_date,
+                    observed_highs=observed_highs,
                 )
                 if cert:
-                    # Avoid duplicate: only add if edge strategy didn't already pick this
-                    if not signal:
-                        signals.append(cert)
-                    else:
-                        logger.info("Certainty confirms edge signal for %s/%s %s",
-                                    city, target_date, best_outcome.bucket.label)
+                    signals.append(cert)
+                break  # only one bucket can match
 
-        # ── BUY_NO on buckets the forecast says are wrong ──────────
+        # ── BUY_NO on buckets far from observed temp ──
         for outcome in city_outcomes:
-            if outcome is best_outcome:
-                continue  # skip the best bucket — we bet YES on it
-            model_prob = model_probs.get(outcome.bucket.label, 0.0)
-            no_price = outcome.current_price_no
+            if _temp_in_bucket(observed_high, outcome.bucket):
+                continue  # never bet NO on the bucket we're in
 
-            # Bet NO when forecast clearly disagrees with market.
-            # NO price range 70-85c — ensures ≥15c profit margin.
-            # Model must give ≤25% YES probability (i.e. ≥75% NO).
+            no_price = outcome.current_price_no
+            # Only bet NO in the 70-85c range
             if not (0.70 <= no_price <= settings.certainty_max_price_no):
                 continue
-            our_no_prob = 1.0 - model_prob
-            if our_no_prob < 0.75:
-                continue  # need ≥75% model confidence it's wrong
 
-            # Edge BUY_NO disabled — too risky, main source of losses.
-            # Only certainty BUY_NO (observed temps) is allowed.
-            signal = None
+            cert = _certainty_signal(
+                outcome, 0.0, no_price,
+                "BUY_NO", 1.0, settings, portfolio, city, target_date,
+                observed_highs=observed_highs,
+            )
+            if cert:
+                signals.append(cert)
 
-            if settings.certainty_enabled:
-                cert = _certainty_signal(
-                    outcome, model_prob, no_price,
-                    "BUY_NO", confidence, settings, portfolio, city, target_date,
-                    vf=vf, observed_highs=observed_highs,
-                )
-                if cert and not signal:
-                    signals.append(cert)
-
-    # Sort: YES bets first (core picks), then NO by edge
+    # Sort: YES bets first, then NO by edge
     signals.sort(key=lambda s: (0 if s.side == "BUY_YES" else 1, -s.edge))
     return signals
 
@@ -337,70 +251,63 @@ def _certainty_signal(
 ) -> Signal | None:
     """Generate a certainty-strategy signal.
 
-    Only bets on TODAY (D+0) — never tomorrow.  Uses the real-time
-    observed high temperature (not forecast) to decide.  After ~3 PM
-    local time, the daily max is essentially locked in, so we can bet
-    with near-certainty and collect the remaining profit margin.
-
-    Example: observed high is 12°C, bucket 12-13°C priced at 70c → buy YES,
-    collect 30c profit per share.
+    Uses the real-time observed high temperature to decide.
+    All preconditions (today only, after 15:00, observed high exists)
+    are checked by detect_signals() before calling this function.
     """
-    if not settings.certainty_enabled:
-        return None
-
-    # Only bet on today — for tomorrow we don't have observed data
-    today = date.today()
-    if target_date != today:
-        return None
-
-    # Certainty bets only after 15:00 local time — daily high is locked in.
-    city_cfg = CITIES.get(city)
-    if city_cfg:
-        from zoneinfo import ZoneInfo
-        local_now = datetime.now(ZoneInfo(city_cfg.timezone))
-        if local_now.hour < settings.certainty_min_hour:
-            return None
-
-    # Certainty strategy REQUIRES observed high — never bet on forecast alone.
-    # Without real temperature data, certainty is just guessing.
+    # Get observed high (guaranteed to exist by caller)
     observed_high = observed_highs.get(city) if observed_highs else None
     if observed_high is None:
-        logger.debug("Certainty skipped for %s/%s: no observed high available", city, target_date)
         return None
 
+    # ── BUY_YES: observed temp MUST be inside the bucket ──
+    # We only bet YES when we KNOW the temperature is in this range.
+    if side == "BUY_YES":
+        if not _temp_in_bucket(observed_high, outcome.bucket):
+            logger.debug(
+                "Certainty YES rejected: observed %.1f° NOT in bucket %s",
+                observed_high, outcome.bucket.label,
+            )
+            return None
+
     # ── BUY_NO safety: validate observed temp is far from bucket ──
-    # After 3 PM, temps can still rise 1-2° — need safety margin.
+    # After 3 PM, temps can still rise 1-2° — need large safety margin.
     if side == "BUY_NO":
         distance = _distance_from_bucket(observed_high, outcome.bucket)
         in_bucket = _temp_in_bucket(observed_high, outcome.bucket)
         if in_bucket:
-            logger.debug(
-                "Certainty NO rejected: observed %.1f° is INSIDE bucket %s",
-                observed_high, outcome.bucket.label,
-            )
             return None
-        if distance < 3.0:
+        if distance < 5.0:
             logger.debug(
-                "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥3°)",
+                "Certainty NO rejected: observed %.1f° only %.1f° from bucket %s (need ≥5°)",
                 observed_high, distance, outcome.bucket.label,
             )
             return None
 
-    # After 3 PM daily high is nearly locked — use tight sigma
-    sigma = 1.0
-    true_prob = _gaussian_bucket_prob(observed_high, sigma, outcome.bucket)
-    if side == "BUY_NO":
-        true_prob = 1.0 - true_prob
     effective_price = token_price
 
-    logger.debug(
-        "Certainty using observed high %.1f° for %s/%s bucket %s → prob=%.0f%%",
-        observed_high, city, target_date, outcome.bucket.label, true_prob * 100,
+    # For BUY_YES: observed temp IS in the bucket (validated by caller).
+    # We know with high confidence this is the right bucket.
+    # For BUY_NO: observed temp is ≥5° from bucket (validated above).
+    # In both cases, we set true_prob directly based on certainty level.
+    if side == "BUY_YES":
+        # Temp is in bucket — after 3 PM, very likely to stay.
+        # Use 90% confidence (temp can still shift ~1° but usually stays).
+        true_prob = 0.90
+    else:
+        # Temp is ≥5° away from bucket — very unlikely to reach it.
+        # Use Gaussian to compute actual probability of NOT being in bucket.
+        sigma = 1.5  # conservative — allows for late afternoon shift
+        bucket_prob = _gaussian_bucket_prob(observed_high, sigma, outcome.bucket)
+        true_prob = 1.0 - bucket_prob
+
+    logger.info(
+        "Certainty %s %s | observed=%.1f° bucket=%s | prob=%.0f%% price=%.0fc",
+        side, city, observed_high, outcome.bucket.label,
+        true_prob * 100, effective_price * 100,
     )
 
-    # Only trade if model is confident enough and price is below cap
-    if true_prob < settings.certainty_min_model_prob:
-        return None
+    # Price caps
     if effective_price >= settings.certainty_max_price or effective_price <= 0.01:
         return None
 
