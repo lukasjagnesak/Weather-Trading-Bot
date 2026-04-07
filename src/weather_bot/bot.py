@@ -149,12 +149,8 @@ async def run_scan(
             for (city, d), shift in significant.items():
                 logger.info("LATENCY OPPORTUNITY: %s/%s shifted %+.1f°", city, d, shift)
 
-    # Step 3b: Cross-validate with multi-source deterministic forecasts
-    logger.info("Fetching multi-source verification forecasts...")
-    verified = await verify_all_cities(city_keys, dates)
-    logger.info("Got verified forecasts for %d city-date combinations", len(verified))
-
-    # Step 3c: Fetch real-time observed highs for today's certainty bets
+    # Step 3b: Fetch real-time observed highs for today's certainty bets
+    # This MUST happen before verification to avoid blocking on slow API calls
     observed_highs: dict[str, float] = {}
     if settings.certainty_enabled:
         logger.info("Fetching real-time observed temperatures for certainty strategy...")
@@ -169,6 +165,14 @@ async def run_scan(
             logger.info("Got observed highs for %d cities: %s",
                         len(observed_highs),
                         ", ".join(f"{k}={v:.1f}" for k, v in observed_highs.items()))
+
+    # Step 3c: Cross-validate with multi-source deterministic forecasts
+    # Skip when running certainty-only (it takes 5-10 min and isn't needed)
+    verified: dict = {}
+    if not settings.certainty_enabled:
+        logger.info("Fetching multi-source verification forecasts...")
+        verified = await verify_all_cities(city_keys, dates)
+        logger.info("Got verified forecasts for %d city-date combinations", len(verified))
 
     # Step 4: Detect trading signals (edge + outcome verification)
     signals = detect_signals(outcomes, forecasts, settings, portfolio, verified=verified,
