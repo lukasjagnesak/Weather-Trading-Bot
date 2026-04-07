@@ -273,8 +273,8 @@ class Settings(BaseSettings):
     max_position_pct: float = 0.02  # max 2% of bankroll per position
     min_edge_threshold: float = 0.15  # minimum 15% edge to trade (conservative)
     kelly_fraction: float = 0.25  # quarter Kelly
-    daily_loss_limit_pct: float = 0.03  # stop at 3% daily loss
-    max_drawdown_pct: float = 0.15  # reduce size at 15% drawdown
+    daily_loss_limit_pct: float = 0.05  # stop at 5% daily loss
+    max_drawdown_pct: float = 0.25  # reduce size at 25% drawdown
 
     # High-confidence "certainty" strategy
     # Uses real-time observed temperature (WU) after 16:00 local time.
