@@ -340,8 +340,7 @@ async def fetch_current_observed_high(
 
     Uses multiple sources in priority order:
     1. Weather Underground (actual resolution source for Polymarket)
-    2. Open-Meteo current weather API (real station observations)
-    3. Open-Meteo forecast with past_hours (model reanalysis, least accurate)
+    2. Open-Meteo hourly forecast — filter to hours already elapsed
 
     Returns the observed high in the city's native unit, or None.
     """
@@ -364,7 +363,7 @@ async def fetch_current_observed_high(
         except Exception as e:
             logger.debug("WU current high failed for %s: %s", city_key, e)
 
-        # Source 2: Open-Meteo current weather (real station data, not forecast)
+        # Source 2: Open-Meteo hourly forecast — take max of past hours
         try:
             temp_unit = "fahrenheit" if city.unit == "fahrenheit" else "celsius"
             resp = await client.get(
@@ -377,7 +376,6 @@ async def fetch_current_observed_high(
                     "end_date": today.isoformat(),
                     "temperature_unit": temp_unit,
                     "timezone": city.timezone,
-                    "past_hours": 24,
                 },
             )
             resp.raise_for_status()
@@ -400,7 +398,7 @@ async def fetch_current_observed_high(
                 if observed_temps:
                     high = max(observed_temps)
                     logger.info(
-                        "Observed high for %s from Open-Meteo (fallback): %.1f°%s (up to %s local)",
+                        "Observed high for %s from Open-Meteo: %.1f°%s (up to %s local)",
                         city_key, high, "F" if city.unit == "fahrenheit" else "C",
                         local_now.strftime("%H:%M"),
                     )
